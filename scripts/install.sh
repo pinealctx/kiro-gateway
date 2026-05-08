@@ -34,7 +34,8 @@ fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SRC="${SCRIPT_DIR}/${APP_NAME}"
-DEST_DIR="${INSTALL_DIR:-/usr/local/bin}"
+DEFAULT_INSTALL_DIR="${HOME}/.kiro-gateway/bin"
+DEST_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 DEST="${DEST_DIR}/${APP_NAME}"
 INSTALL_URL="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
 
@@ -76,15 +77,15 @@ fi
 
 mkdir -p "$DEST_DIR" 2>/dev/null || {
   echo "error: cannot create ${DEST_DIR}." >&2
-  echo "Try: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=${DEST_DIR} sh" >&2
-  echo "Or install to your user bin: mkdir -p \"\$HOME/.local/bin\" && curl -fsSL ${INSTALL_URL} | INSTALL_DIR=\"\$HOME/.local/bin\" sh" >&2
+  echo "Try a user-writable directory: INSTALL_DIR=\"\$HOME/.kiro-gateway/bin\"" >&2
+  echo "Or install system-wide: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=/usr/local/bin sh" >&2
   exit 1
 }
 
 cp "$SRC" "$DEST" 2>/dev/null || {
   echo "error: cannot write ${DEST}." >&2
-  echo "Try: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=${DEST_DIR} sh" >&2
-  echo "Or install to your user bin: mkdir -p \"\$HOME/.local/bin\" && curl -fsSL ${INSTALL_URL} | INSTALL_DIR=\"\$HOME/.local/bin\" sh" >&2
+  echo "Try a user-writable directory: INSTALL_DIR=\"\$HOME/.kiro-gateway/bin\"" >&2
+  echo "Or install system-wide: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=/usr/local/bin sh" >&2
   exit 1
 }
 chmod 755 "$DEST"

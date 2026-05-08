@@ -264,7 +264,7 @@ func replaceExecutableWithSudo(target, newBinary string, mode os.FileMode) error
 		return fmt.Errorf("backup current executable: permission denied")
 	}
 	if _, err := exec.LookPath("sudo"); err != nil {
-		return fmt.Errorf("backup current executable: permission denied; rerun with sudo or reinstall with sudo")
+		return fmt.Errorf("backup current executable: permission denied; rerun with sudo or reinstall to $HOME/.kiro-gateway/bin")
 	}
 
 	script := `set -eu
