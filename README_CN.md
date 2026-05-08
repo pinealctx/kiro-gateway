@@ -41,19 +41,11 @@ curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts
 
 默认安装目录是 `$HOME/.kiro-gateway/bin`。如果该目录不在 `PATH` 中，安装脚本会写入 shell profile。
 
-如果需要安装到系统目录，可显式指定 `/usr/local/bin`：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.sh | sudo INSTALL_DIR=/usr/local/bin sh
-```
-
 Windows PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.ps1 -UseB | iex"
 ```
-
-可用 `INSTALL_DIR` 指定其他自定义安装目录。
 
 Linux/macOS 已安装二进制可直接原地升级：
 

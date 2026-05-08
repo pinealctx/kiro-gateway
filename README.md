@@ -41,19 +41,11 @@ curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts
 
 The default install directory is `$HOME/.kiro-gateway/bin`. The installer adds it to your shell profile when it is not already in `PATH`.
 
-To install system-wide, choose `/usr/local/bin` explicitly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.sh | sudo INSTALL_DIR=/usr/local/bin sh
-```
-
 Windows PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.ps1 -UseB | iex"
 ```
-
-Set `INSTALL_DIR` to choose another custom install directory.
 
 Upgrade an installed Linux/macOS binary in place:
 
