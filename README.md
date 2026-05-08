@@ -36,7 +36,15 @@ Kiro support is unofficial and intended for personal testing and research. Upstr
 Linux/macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.sh | sudo sh
+```
+
+The default install directory is `/usr/local/bin`, which usually requires `sudo`.
+To install without `sudo`, choose a user-writable directory:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/pinealctx/kiro-gateway/main/scripts/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 Windows PowerShell:

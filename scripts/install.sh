@@ -36,6 +36,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SRC="${SCRIPT_DIR}/${APP_NAME}"
 DEST_DIR="${INSTALL_DIR:-/usr/local/bin}"
 DEST="${DEST_DIR}/${APP_NAME}"
+INSTALL_URL="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
 
 if [ ! -f "$SRC" ]; then
   DOWNLOAD_OS="$CURRENT_OS"
@@ -74,12 +75,16 @@ if [ ! -f "$SRC" ]; then
 fi
 
 mkdir -p "$DEST_DIR" 2>/dev/null || {
-  echo "error: cannot create ${DEST_DIR}. Try: sudo INSTALL_DIR=${DEST_DIR} sh install.sh" >&2
+  echo "error: cannot create ${DEST_DIR}." >&2
+  echo "Try: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=${DEST_DIR} sh" >&2
+  echo "Or install to your user bin: mkdir -p \"\$HOME/.local/bin\" && curl -fsSL ${INSTALL_URL} | INSTALL_DIR=\"\$HOME/.local/bin\" sh" >&2
   exit 1
 }
 
 cp "$SRC" "$DEST" 2>/dev/null || {
-  echo "error: cannot write ${DEST}. Try: sudo INSTALL_DIR=${DEST_DIR} sh install.sh" >&2
+  echo "error: cannot write ${DEST}." >&2
+  echo "Try: curl -fsSL ${INSTALL_URL} | sudo INSTALL_DIR=${DEST_DIR} sh" >&2
+  echo "Or install to your user bin: mkdir -p \"\$HOME/.local/bin\" && curl -fsSL ${INSTALL_URL} | INSTALL_DIR=\"\$HOME/.local/bin\" sh" >&2
   exit 1
 }
 chmod 755 "$DEST"

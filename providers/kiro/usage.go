@@ -353,7 +353,7 @@ func (c *CWClient) newListModelsRequest(ctx context.Context, profileArn string) 
 }
 
 func (c *CWClient) restEndpoint() string {
-	return fmt.Sprintf("https://q.%s.amazonaws.com/", normalizeRegion(c.region))
+	return fmt.Sprintf("https://q.%s.amazonaws.com/", normalizeRegion(c.apiRegion))
 }
 
 func setKiroRestHeaders(req *http.Request, token *TokenInfo, target string) {

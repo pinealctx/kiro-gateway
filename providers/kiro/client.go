@@ -22,6 +22,11 @@ const (
 
 	maxRetries = 3
 	maxLogBody = 64 * 1024
+
+	// Kiro's Q runtime endpoint is not available in every AWS/IDC region.
+	// Account regions are still used for login/token flows; API calls go to
+	// the fixed Kiro service region.
+	kiroAPIRegion = "us-east-1"
 )
 
 // retryBackoff defines the backoff durations for retries: [1s, 3s, 10s].
@@ -29,20 +34,20 @@ var retryBackoff = []time.Duration{1 * time.Second, 3 * time.Second, 10 * time.S
 
 // CWClient handles HTTP communication with the CodeWhisperer backend.
 type CWClient struct {
-	client *http.Client
-	logger *zap.Logger
-	region string
+	client    *http.Client
+	logger    *zap.Logger
+	apiRegion string
 }
 
-func NewCWClient(logger *zap.Logger, region string) *CWClient {
+func NewCWClient(logger *zap.Logger, _ string) *CWClient {
 	return &CWClient{
 		client: &http.Client{
 			// Long read timeout for Claude Code sessions that can produce very long outputs.
 			// Connect/TLS handshake is bounded by the OS default (~30s).
 			Timeout: 2 * time.Hour,
 		},
-		logger: logger,
-		region: normalizeRegion(region),
+		logger:    logger,
+		apiRegion: kiroAPIRegion,
 	}
 }
 
@@ -159,7 +164,7 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 }
 
 func (c *CWClient) endpoint(path string) string {
-	return fmt.Sprintf("https://q.%s.amazonaws.com/%s", normalizeRegion(c.region), path)
+	return fmt.Sprintf("https://q.%s.amazonaws.com/%s", normalizeRegion(c.apiRegion), path)
 }
 
 func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {

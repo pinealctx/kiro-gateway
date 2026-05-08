@@ -17,6 +17,36 @@ const { Text, Link } = Typography;
 
 type DeviceLoginMethod = "builder_id" | "organization";
 
+const IDC_REGION_OPTIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-1",
+  "us-west-2",
+  "ca-central-1",
+  "eu-central-1",
+  "eu-west-1",
+  "eu-west-2",
+  "eu-west-3",
+  "eu-north-1",
+  "eu-south-1",
+  "ap-south-1",
+  "ap-south-2",
+  "ap-southeast-1",
+  "ap-southeast-2",
+  "ap-southeast-3",
+  "ap-northeast-1",
+  "ap-northeast-2",
+  "ap-northeast-3",
+  "ap-east-1",
+  "sa-east-1",
+  "me-south-1",
+  "me-central-1",
+  "af-south-1",
+  "il-central-1",
+  "us-gov-west-1",
+  "us-gov-east-1",
+];
+
 interface Props {
   open: boolean;
   providerName: string;
@@ -39,6 +69,12 @@ export default function KiroAuthModal({ open, providerName, providerRegion, onCl
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const { message } = App.useApp();
   const t = useT();
+  const idcRegionOptions = Array.from(
+    new Set([providerRegion, ...IDC_REGION_OPTIONS].filter((region): region is string => Boolean(region)))
+  ).map((region) => ({
+    label: region,
+    value: region,
+  }));
 
   const fetchStatus = async () => {
     setLoading(true);
@@ -111,7 +147,7 @@ export default function KiroAuthModal({ open, providerName, providerRegion, onCl
     try {
       const session = await startKiroDeviceLogin(providerName, {
         method: deviceMethod,
-        idc_region: deviceRegion.trim() || "us-east-1",
+        idc_region: deviceRegion || "us-east-1",
         start_url: deviceMethod === "organization" ? startUrl : undefined,
       });
       const verifyUrl = session.verification_uri_complete || session.verification_uri || "";
@@ -306,11 +342,13 @@ export default function KiroAuthModal({ open, providerName, providerRegion, onCl
                         />
                       </Form.Item>
                       <Form.Item label={t.kiro.idcRegion} name="idc_region" className="!mb-3">
-                        <Input
+                        <Select
+                          showSearch
                           value={deviceRegion}
-                          onChange={(e) => setDeviceRegion(e.target.value)}
+                          onChange={setDeviceRegion}
                           placeholder={t.kiro.idcRegionPlaceholder}
                           disabled={!!loginUrl || !!deviceLogin || deviceLoginLoading}
+                          options={idcRegionOptions}
                         />
                       </Form.Item>
                       {deviceMethod === "organization" && (

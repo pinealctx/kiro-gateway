@@ -5,7 +5,7 @@ type ProviderConfig struct {
 	Name    string `mapstructure:"name"`
 	Type    string `mapstructure:"type"`    // Kiro-only mode accepts "kiro"
 	Enabled bool   `mapstructure:"enabled"` // Whether the account is active
-	Region  string `mapstructure:"region"`  // AWS/Kiro service region for q.{region}.amazonaws.com
+	Region  string `mapstructure:"region"`  // Account login/IDC region; Kiro Q API uses a fixed service region.
 }
 
 // GatewayConfig is the top-level YAML configuration.
