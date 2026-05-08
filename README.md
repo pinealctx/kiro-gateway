@@ -55,6 +55,12 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 
 Set `INSTALL_DIR` to choose a custom install directory.
 
+Upgrade an installed Linux/macOS binary in place:
+
+```bash
+kiro-gateway update
+```
+
 ### Release Archive
 
 You can also download a release archive and run the included installer:

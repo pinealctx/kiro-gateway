@@ -55,6 +55,12 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 
 可用 `INSTALL_DIR` 指定安装目录。
 
+Linux/macOS 已安装二进制可直接原地升级：
+
+```bash
+kiro-gateway update
+```
+
 ### Release 压缩包
 
 也可以下载 release 压缩包后运行内置安装脚本：
