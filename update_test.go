@@ -33,6 +33,12 @@ func TestFindReleaseAssetMissing(t *testing.T) {
 	}
 }
 
+func TestUpdateCommandSilencesUsageOnRuntimeErrors(t *testing.T) {
+	if !updateCmd.SilenceUsage {
+		t.Fatal("update command should not print usage for runtime update errors")
+	}
+}
+
 func TestExtractTarGzBinary(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "kiro-gateway_v1.2.3_linux_amd64.tar.gz")

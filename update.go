@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -30,9 +31,10 @@ func init() {
 }
 
 var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Update kiro-gateway to the latest GitHub release",
-	RunE:  runUpdate,
+	Use:          "update",
+	Short:        "Update kiro-gateway to the latest GitHub release",
+	SilenceUsage: true,
+	RunE:         runUpdate,
 }
 
 func runUpdate(cmd *cobra.Command, _ []string) error {
@@ -244,6 +246,9 @@ func replaceExecutable(target, newBinary string) error {
 	backup := target + ".old"
 	_ = os.Remove(backup)
 	if err := os.Rename(target, backup); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return replaceExecutableWithSudo(target, newBinary, info.Mode().Perm())
+		}
 		return fmt.Errorf("backup current executable: %w", err)
 	}
 	if err := copyFile(newBinary, target, info.Mode().Perm()); err != nil {
@@ -251,6 +256,45 @@ func replaceExecutable(target, newBinary string) error {
 		return fmt.Errorf("install new executable: %w", err)
 	}
 	_ = os.Remove(backup)
+	return nil
+}
+
+func replaceExecutableWithSudo(target, newBinary string, mode os.FileMode) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("backup current executable: permission denied")
+	}
+	if _, err := exec.LookPath("sudo"); err != nil {
+		return fmt.Errorf("backup current executable: permission denied; rerun with sudo or reinstall with sudo")
+	}
+
+	script := `set -eu
+target=$1
+src=$2
+mode=$3
+backup="${target}.old"
+restore_on_error() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -f "$backup" ]; then
+    rm -f "$target" 2>/dev/null || true
+    mv -f "$backup" "$target" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+trap restore_on_error EXIT
+rm -f "$backup"
+mv "$target" "$backup"
+cp "$src" "$target"
+chmod "$mode" "$target"
+rm -f "$backup"
+trap - EXIT
+`
+	cmd := exec.Command("sudo", "sh", "-c", script, "kiro-gateway-update", target, newBinary, fmt.Sprintf("%#o", mode.Perm()))
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("replace executable with sudo: %w", err)
+	}
 	return nil
 }
 
