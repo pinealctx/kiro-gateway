@@ -419,7 +419,10 @@ export default function ProvidersPage() {
                   {formatNumber(quota.usage.used_precise || quota.usage.used)} / {formatNumber(quota.usage.limit_precise || quota.usage.limit)}
                 </Text>
               </div>
-              <Progress percent={Math.min(100, Math.round(quota.usage.percent_used || 0))} />
+              <Progress
+                percent={Math.min(100, quota.usage.percent_used || 0)}
+                format={(percent) => `${formatPercent(percent)}%`}
+              />
             </div>
             <Descriptions column={2} bordered size="small">
               <Descriptions.Item label={t.providers.quotaTier}>{quota.tier || "-"}</Descriptions.Item>
@@ -537,6 +540,14 @@ export default function ProvidersPage() {
 function formatNumber(value?: number) {
   if (value == null || Number.isNaN(value)) return "-";
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatPercent(value?: number) {
+  if (value == null || Number.isNaN(value)) return "0.00";
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function formatTokenLimits(limits?: { max_input_tokens: number; max_output_tokens: number }) {
