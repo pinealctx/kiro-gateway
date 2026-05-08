@@ -26,7 +26,11 @@ func TestResolveModel_ExactMatch(t *testing.T) {
 		{"claude-opus-4.6-1m", "claude-opus-4.6"},
 		{"claude-sonnet-4.6", "claude-sonnet-4.6"},
 		{"claude-opus-4.5", "claude-opus-4.5"},
-		{"claude-sonnet-4-5", "claude-sonnet-4-5"},
+		{"claude-sonnet-4-5", "claude-sonnet-4.5"},
+		{"Claude-Sonnet-4-5", "claude-sonnet-4.5"},
+		{"claude-haiku-4-5-latest", "claude-haiku-4.5"},
+		{"claude-3-7-sonnet", "claude-3.7-sonnet"},
+		{"claude-4.5-opus-high", "claude-opus-4.5"},
 		{"gpt-4o", "gpt-4o"},
 		{"  gpt-4o  ", "gpt-4o"},
 	}
@@ -44,7 +48,9 @@ func TestResolveModel_ClaudeDateSuffixStripping(t *testing.T) {
 	}{
 		{"claude-sonnet-4-20250514", "claude-sonnet-4"},
 		{"claude-opus-4-20250514", "claude-opus-4"},
-		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5"},
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4.5"},
+		{"claude-sonnet-4.5-20250929", "claude-sonnet-4.5"},
+		{"claude-3-7-sonnet-20250219", "claude-3.7-sonnet"},
 	}
 	for _, tc := range tests {
 		got := ResolveModel(tc.input)

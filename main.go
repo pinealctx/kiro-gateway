@@ -71,6 +71,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		zap.String("host", gwCfg.Server.Host),
 		zap.Int("port", gwCfg.Server.Port),
 	)
+	kiro.ConfigureRuntime(kiro.RuntimeConfig{
+		FirstTokenTimeout: time.Duration(gwCfg.Defaults.FirstTokenTimeoutSeconds) * time.Second,
+		FirstTokenRetries: gwCfg.Defaults.FirstTokenMaxRetries,
+		MaxPayloadBytes:   gwCfg.Defaults.MaxPayloadBytes,
+		AutoTrimPayload:   gwCfg.Defaults.AutoTrimPayload,
+	})
 
 	// Initialize Kiro account registry.
 	registry := providers.NewRegistry()

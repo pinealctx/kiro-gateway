@@ -73,6 +73,10 @@ jobs:
             cp config.example.yaml "$OUTDIR/config.example.yaml"
             cp LICENSE "$OUTDIR/LICENSE"
             cp README.md "$OUTDIR/README.md"
+            cp scripts/install.sh "$OUTDIR/install.sh"
+            cp scripts/install.ps1 "$OUTDIR/install.ps1"
+            perl -pi -e "s/__KIRO_GATEWAY_OS__/${GOOS}/g; s/__KIRO_GATEWAY_ARCH__/${GOARCH}/g" "$OUTDIR/install.sh" "$OUTDIR/install.ps1"
+            chmod +x "$OUTDIR/install.sh"
 
             if [ "$GOOS" = "windows" ]; then
               (cd dist && zip -r "${PKG}.zip" "$PKG")

@@ -70,6 +70,15 @@ func TestLoadFromFile_Defaults(t *testing.T) {
 	if !gw.Auth.AdminLocalOnly {
 		t.Error("default admin_local_only should be true")
 	}
+	if gw.Defaults.FirstTokenTimeoutSeconds != 15 {
+		t.Errorf("default first_token_timeout_seconds = %d", gw.Defaults.FirstTokenTimeoutSeconds)
+	}
+	if gw.Defaults.FirstTokenMaxRetries != 3 {
+		t.Errorf("default first_token_max_retries = %d", gw.Defaults.FirstTokenMaxRetries)
+	}
+	if gw.Defaults.MaxPayloadBytes != 600000 {
+		t.Errorf("default max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
+	}
 }
 
 func TestLoadFromFile_CLIOverridesFile(t *testing.T) {
@@ -142,6 +151,39 @@ func TestSynthesizeFromFlags(t *testing.T) {
 	}
 	if gw.Tenant.DBPath != DefaultDBPath() {
 		t.Errorf("db_path = %q, want %q", gw.Tenant.DBPath, DefaultDBPath())
+	}
+	if gw.Defaults.FirstTokenTimeoutSeconds != 15 {
+		t.Errorf("first_token_timeout_seconds = %d", gw.Defaults.FirstTokenTimeoutSeconds)
+	}
+	if gw.Defaults.FirstTokenMaxRetries != 3 {
+		t.Errorf("first_token_max_retries = %d", gw.Defaults.FirstTokenMaxRetries)
+	}
+	if gw.Defaults.MaxPayloadBytes != 600000 {
+		t.Errorf("max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
+	}
+}
+
+func TestSynthesizeFromFlags_RuntimeOptionsCanDisableGuards(t *testing.T) {
+	cmd := newTestCmd()
+	cmd.SetArgs([]string{"--first-token-timeout=0", "--first-token-max-retries=0", "--max-payload-bytes=0", "--auto-trim-payload"})
+	cmd.Execute()
+
+	gw, err := LoadGatewayConfig(cmd)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if gw.Defaults.FirstTokenTimeoutSeconds != 0 {
+		t.Errorf("first_token_timeout_seconds = %d, want 0", gw.Defaults.FirstTokenTimeoutSeconds)
+	}
+	if gw.Defaults.FirstTokenMaxRetries != 0 {
+		t.Errorf("first_token_max_retries = %d, want 0", gw.Defaults.FirstTokenMaxRetries)
+	}
+	if gw.Defaults.MaxPayloadBytes != 0 {
+		t.Errorf("max_payload_bytes = %d, want 0", gw.Defaults.MaxPayloadBytes)
+	}
+	if !gw.Defaults.AutoTrimPayload {
+		t.Error("auto_trim_payload should be true")
 	}
 }
 

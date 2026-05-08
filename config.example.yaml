@@ -25,6 +25,10 @@ auth:
 defaults:
   health_check_enabled: true
   health_check_seconds: 60
+  first_token_timeout_seconds: 15 # retry stream startup when no upstream event arrives
+  first_token_max_retries: 3
+  max_payload_bytes: 600000       # 0 disables payload guard
+  auto_trim_payload: false        # true = drop oldest history until payload fits
 
 tenant:
   db_path: "kiro-gateway.db"

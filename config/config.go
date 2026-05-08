@@ -27,6 +27,10 @@ func BindFlags(cmd *cobra.Command) {
 	// Health check
 	f.Bool("no-health-check", false, "Disable provider health checks (env: NO_HEALTH_CHECK)")
 	f.Int("health-check-interval", 60, "Health check interval in seconds (env: HEALTH_CHECK_INTERVAL)")
+	f.Int("first-token-timeout", 15, "Seconds to wait for the first upstream stream event before retrying (env: FIRST_TOKEN_TIMEOUT)")
+	f.Int("first-token-max-retries", 3, "Maximum retries when the first upstream stream event times out (env: FIRST_TOKEN_MAX_RETRIES)")
+	f.Int("max-payload-bytes", 600000, "Maximum serialized Kiro request payload size; 0 disables the guard (env: MAX_PAYLOAD_BYTES)")
+	f.Bool("auto-trim-payload", false, "Trim oldest conversation history when Kiro payload is too large (env: AUTO_TRIM_PAYLOAD)")
 
 	// Tenant
 	f.String("db-path", DefaultDBPath(), "SQLite database path (env: DB_PATH)")
@@ -100,6 +104,18 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	if cmd.Flags().Changed("health-check-interval") {
 		gw.Defaults.HealthCheckSeconds, _ = cmd.Flags().GetInt("health-check-interval")
 	}
+	if cmd.Flags().Changed("first-token-timeout") {
+		gw.Defaults.FirstTokenTimeoutSeconds, _ = cmd.Flags().GetInt("first-token-timeout")
+	}
+	if cmd.Flags().Changed("first-token-max-retries") {
+		gw.Defaults.FirstTokenMaxRetries, _ = cmd.Flags().GetInt("first-token-max-retries")
+	}
+	if cmd.Flags().Changed("max-payload-bytes") {
+		gw.Defaults.MaxPayloadBytes, _ = cmd.Flags().GetInt("max-payload-bytes")
+	}
+	if cmd.Flags().Changed("auto-trim-payload") {
+		gw.Defaults.AutoTrimPayload, _ = cmd.Flags().GetBool("auto-trim-payload")
+	}
 	if cmd.Flags().Changed("db-path") {
 		gw.Tenant.DBPath, _ = cmd.Flags().GetString("db-path")
 	}
@@ -118,6 +134,15 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	}
 	if gw.Defaults.HealthCheckSeconds == 0 {
 		gw.Defaults.HealthCheckSeconds = 60
+	}
+	if gw.Defaults.FirstTokenTimeoutSeconds == 0 && !v.IsSet("defaults.first_token_timeout_seconds") && !cmd.Flags().Changed("first-token-timeout") {
+		gw.Defaults.FirstTokenTimeoutSeconds = 15
+	}
+	if gw.Defaults.FirstTokenMaxRetries == 0 && !v.IsSet("defaults.first_token_max_retries") && !cmd.Flags().Changed("first-token-max-retries") {
+		gw.Defaults.FirstTokenMaxRetries = 3
+	}
+	if gw.Defaults.MaxPayloadBytes == 0 && !v.IsSet("defaults.max_payload_bytes") && !cmd.Flags().Changed("max-payload-bytes") {
+		gw.Defaults.MaxPayloadBytes = 600000
 	}
 	if gw.Tenant.DBPath == "" {
 		gw.Tenant.DBPath = DefaultDBPath()
@@ -140,6 +165,10 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	// Health check
 	noHealthCheck := resolveBool(cmd, "no-health-check", "NO_HEALTH_CHECK")
 	healthCheckInterval := resolveInt(cmd, "health-check-interval", "HEALTH_CHECK_INTERVAL")
+	firstTokenTimeout := resolveInt(cmd, "first-token-timeout", "FIRST_TOKEN_TIMEOUT")
+	firstTokenMaxRetries := resolveInt(cmd, "first-token-max-retries", "FIRST_TOKEN_MAX_RETRIES")
+	maxPayloadBytes := resolveInt(cmd, "max-payload-bytes", "MAX_PAYLOAD_BYTES")
+	autoTrimPayload := resolveBool(cmd, "auto-trim-payload", "AUTO_TRIM_PAYLOAD")
 
 	// Tenant
 	dbPath := resolveStr(cmd, "db-path", "DB_PATH")
@@ -172,8 +201,12 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 			AdminLocalOnly: adminLocalOnly,
 		},
 		Defaults: DefaultsConfig{
-			HealthCheckEnabled: !noHealthCheck,
-			HealthCheckSeconds: healthCheckInterval,
+			HealthCheckEnabled:       !noHealthCheck,
+			HealthCheckSeconds:       healthCheckInterval,
+			FirstTokenTimeoutSeconds: firstTokenTimeout,
+			FirstTokenMaxRetries:     firstTokenMaxRetries,
+			MaxPayloadBytes:          maxPayloadBytes,
+			AutoTrimPayload:          autoTrimPayload,
 		},
 		Tenant: TenantConfig{
 			DBPath: dbPath,

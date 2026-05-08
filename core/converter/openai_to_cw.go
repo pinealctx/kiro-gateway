@@ -3,6 +3,7 @@ package converter
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -24,11 +25,19 @@ var kiroModelMap = map[string]string{
 	"claude-opus-4.6":    "claude-opus-4.6",
 }
 
-// ResolveModel applies the Kiro model aliases observed in kiro-bridge-go.
+var (
+	standardClaudeVersionRE = regexp.MustCompile(`^claude-(haiku|sonnet|opus)-([0-9]+)-([0-9]{1,2})(?:-([0-9]{8}|latest|[0-9]+))?$`)
+	claudeNoMinorRE         = regexp.MustCompile(`^claude-(haiku|sonnet|opus)-([0-9]+)(?:-[0-9]{8})?$`)
+	legacyClaudeRE          = regexp.MustCompile(`^claude-([0-9]+)-([0-9]+)-(haiku|sonnet|opus)(?:-([0-9]{8}|latest|[0-9]+))?$`)
+	dotClaudeDateRE         = regexp.MustCompile(`^(claude-(?:(?:haiku|sonnet|opus)-[0-9]+\.[0-9]+|[0-9]+\.[0-9]+-(?:haiku|sonnet|opus)))-[0-9]{8}$`)
+	invertedClaudeRE        = regexp.MustCompile(`^claude-([0-9]+)\.([0-9]+)-(haiku|sonnet|opus)-.+$`)
+)
+
+// ResolveModel applies Kiro model aliases and normalization observed in kiro-bridge-style clients.
 // Behavior:
 //  1. trim spaces
 //  2. map known Kiro aliases / unsupported 1m variants to backend model ids
-//  3. normalize Claude date suffix (claude-*-YYYYMMDD -> claude-*)
+//  3. normalize Claude dash minor versions and date/latest suffixes to Kiro dot format
 //  4. pass-through for all other values
 //  5. empty model remains empty; callers own model selection
 func ResolveModel(model string) string {
@@ -39,14 +48,24 @@ func ResolveModel(model string) string {
 	if mapped, ok := kiroModelMap[model]; ok {
 		return mapped
 	}
-	if strings.HasPrefix(model, "claude-") {
-		parts := strings.Split(model, "-")
-		if n := len(parts); n >= 4 {
-			last := parts[n-1]
-			if len(last) == 8 && last[0] >= '2' && last[0] <= '9' {
-				return strings.Join(parts[:n-1], "-")
-			}
-		}
+	lower := strings.ToLower(model)
+	if mapped, ok := kiroModelMap[lower]; ok {
+		return mapped
+	}
+	if m := standardClaudeVersionRE.FindStringSubmatch(lower); m != nil {
+		return fmt.Sprintf("claude-%s-%s.%s", m[1], m[2], m[3])
+	}
+	if m := claudeNoMinorRE.FindStringSubmatch(lower); m != nil {
+		return fmt.Sprintf("claude-%s-%s", m[1], m[2])
+	}
+	if m := legacyClaudeRE.FindStringSubmatch(lower); m != nil {
+		return fmt.Sprintf("claude-%s.%s-%s", m[1], m[2], m[3])
+	}
+	if m := dotClaudeDateRE.FindStringSubmatch(lower); m != nil {
+		return m[1]
+	}
+	if m := invertedClaudeRE.FindStringSubmatch(lower); m != nil {
+		return fmt.Sprintf("claude-%s-%s.%s", m[3], m[1], m[2])
 	}
 	return model
 }
