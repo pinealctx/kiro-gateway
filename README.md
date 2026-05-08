@@ -1,373 +1,124 @@
-# AntiGateway
+# Kiro Gateway
 
 [English](README.md) | [简体中文](README_CN.md)
 
-A unified AI gateway that provides a standardized interface for multiple LLM providers. AntiGateway accepts requests in OpenAI and Anthropic API formats and routes them to various upstream providers with protocol conversion, load balancing, and multi-tenant support.
+Kiro Gateway exposes OpenAI and Anthropic-compatible endpoints backed by Kiro / CodeWhisperer, with support for multiple accounts and multiple API keys bound to different accounts.
 
-## Important Notice
+Module path: `github.com/pinealctx/kiro-gateway`. Binary name: `kiro-gateway`.
 
-Kiro and GitHub Copilot provider support in this project is **unofficial** and intended for personal testing/research use.
-It may become invalid at any time due to upstream policy or protocol changes.
-If any related implementation affects your rights or interests, please contact the maintainer (or open an issue), and the related code can be removed promptly.
+## Notice
+
+Kiro support is unofficial and intended for personal testing/research. It may break if upstream protocols or policies change.
 
 ## Features
 
-- **Multi-Provider Support**: Route requests to Kiro (AWS Claude), OpenAI, GitHub Copilot, and Anthropic
-- **Protocol Conversion**: Seamlessly convert between OpenAI, Anthropic, and CodeWhisperer formats
-- **Load Balancing**: Five strategies - weighted random, round-robin, least-used, priority, and smart (latency-aware)
-- **Multi-Tenant Management**: Per-key authentication, rate limiting (QPM/TPM), and usage tracking
-- **Auto-Continuation**: Automatically continue truncated LLM responses
-- **Output Sanitization**: Strip IDE-specific artifacts and perform identity replacement
-- **Streaming Support**: Full SSE streaming for both OpenAI and Anthropic protocols
-- **Web Admin UI**: React-based dashboard for managing keys, providers, and monitoring usage
-- **Prometheus Metrics**: Built-in metrics for requests, latency, tokens, and errors
+- Multiple accounts, each with independent login, refresh, and persisted token state.
+- API keys must bind to one or more allowed accounts.
+- OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` compatibility, with optional account-scoped URLs.
+- CodeWhisperer request conversion and AWS EventStream parsing.
+- Tool-use handling, IDE built-in tool filtering, and best-effort remapping to client tools.
+- `thinking` / `reasoning_effort` support with `reasoning_content` streaming.
+- Auto-continuation for truncated responses.
+- Output sanitization for Kiro / CodeWhisperer identity leaks and XML tool tags.
+- Web admin UI for accounts, API keys, login, and usage.
 
 ## Quick Start
 
-### Prerequisites
-
-- Go 1.23+
-- Node.js 20+ (for frontend development)
-
-### Installation
-
 ```bash
-# Clone the repository
-git clone https://github.com/pinealctx/anti-gateway.git
-cd anti-gateway
-
-# Build the server
-go build -o antigateway .
-
-# Copy and configure
+go build -o kiro-gateway .
 cp config.example.yaml config.yaml
-# Edit config.yaml with your settings
-
-# Run
-./antigateway
+./kiro-gateway --config config.yaml
 ```
 
-### Docker
-
-```bash
-# Build image
-docker build -t antigateway .
-
-# Run container
-docker run -p 8080:8080 -v $(pwd)/config.yaml:/app/config.yaml antigateway
-```
+Open `/ui` and log in with the Admin Key printed in the startup logs.
 
 ## Configuration
-
-Create a `config.yaml` file based on `config.example.yaml`:
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 8080
-  log_level: "info"      # debug | info | warn | error
-  cors_origins: []       # Empty = allow all (dev mode)
+  log_level: "info"
 
 auth:
-  api_key: ""            # Bearer token for API auth (empty = disabled)
-  admin_key: ""          # Separate key for /admin/* endpoints
-
-defaults:
-  provider: ""           # Fallback provider name
-  model: "claude-sonnet-4-20250514"
-  lb_strategy: "smart"   # weighted | round-robin | least-used | priority | smart
+  admin_key: ""           # generated at startup when empty
+  admin_local_only: true  # restrict /admin/* to localhost clients by default
 
 tenant:
-  enabled: false         # Enable multi-tenant mode
-  db_path: "antigateway.db"
+  db_path: "kiro-gateway.db"
 ```
 
-## API Endpoints
+Use `--config` or `KIRO_GATEWAY_CONFIG` to choose a config file. When a config file is provided, explicitly set CLI flags override file values; otherwise CLI flags override environment variables, which override defaults.
 
-### Chat Completions
+## Accounts and API Keys
 
-**OpenAI Format**
+1. Create accounts in the `Accounts` admin page, for example `kiro-main` and `kiro-work`.
+2. Authorize each account with Kiro PKCE login, or import the local `kiro-cli` token.
+3. Create API keys, select the allowed accounts, and choose a default account. The UI uses the first selected account as the default unless you change it.
+4. Use plain `/v1/...` routes for the API key's default account, or select another allowed account at request time with `/a/{kiro_account}` in the base URL.
+
+The requested URL account must be in the API key allow-list. For Claude Code, `http://localhost:8080` uses the key default account, while `http://localhost:8080/a/kiro-work` forces `kiro-work`.
+
+Account names must be 1-64 characters: letters, numbers, `.`, `_`, and `-`; the first character must be a letter or number.
+Kiro Gateway does not bind models to accounts or API keys; the request `model` is supplied by the client.
+`/v1/models` and `/a/{kiro_account}/v1/models` resolve the account first and query Kiro's `ListAvailableModels` API for that account.
+Claude Code only adds discovered gateway models whose IDs start with `claude` or `anthropic`, so Kiro Gateway exposes real Kiro model IDs with an `anthropic.` discovery prefix (for example `anthropic.deepseek-3.2`) and strips that prefix before calling Kiro. Enable Claude Code discovery with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`.
+
+## API Examples
+
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://localhost:8080/a/kiro-work/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
-    "messages": [{"role": "user", "content": "Hello!"}],
+    "model": "claude-sonnet-4.6",
+    "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
 ```
 
-**Anthropic Format**
 ```bash
-curl -X POST http://localhost:8080/v1/messages \
+curl -X POST http://localhost:8080/a/kiro-work/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: YOUR_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4.6",
     "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
-
-### Model Routing
-
-Use model prefixes to route to specific providers:
-- `openai/gpt-4o` → OpenAI provider
-- `anthropic/claude-3-opus` → Anthropic provider
-- `kiro/claude-sonnet-4-20250514` → Kiro provider
-
-### Model Handling Policy
-
-- Requests use **minimal normalization + passthrough**:
-  - Empty model falls back to provider default model.
-  - `claude-*-YYYYMMDD` date suffix is stripped when needed.
-  - Other model names are forwarded as-is (no large alias remapping table).
-- `/v1/models` returns an **outward-facing supported catalog** for Kiro/Copilot:
-  - Includes maintained static model IDs.
-  - Merges dynamic model IDs discovered from configured Copilot providers.
-  - Includes both raw IDs and provider-prefixed IDs (such as `kiro/...`, `copilot/...`) for routing convenience.
-
-### Other Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/models` | GET | List available models |
-| `/v1/embeddings` | POST | Generate embeddings (OpenAI format) |
-| `/health` | GET | Health check |
-| `/metrics` | GET | Prometheus metrics |
-| `/ui` | GET | Web admin UI |
 
 ## Admin API
 
-Providers are managed dynamically via the Admin API:
+Runtime APIs can be exposed on a public listen address, while `/admin/*` is restricted to localhost by default through `auth.admin_local_only`.
 
-```bash
-# List providers
-curl http://localhost:8080/admin/providers \
-  -H "Authorization: Bearer ADMIN_KEY"
-
-# Add a provider
-curl -X POST http://localhost:8080/admin/providers \
-  -H "Authorization: Bearer ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "openai-main",
-    "type": "openai",
-    "api_key": "sk-...",
-    "weight": 100,
-    "enabled": true
-  }'
-
-# Update a provider
-curl -X PUT http://localhost:8080/admin/providers/1 \
-  -H "Authorization: Bearer ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"weight": 50}'
-
-# Delete a provider
-curl -X DELETE http://localhost:8080/admin/providers/1 \
-  -H "Authorization: Bearer ADMIN_KEY"
-```
-
-### API Key Management (Multi-Tenant Mode)
-
-```bash
-# Create API key
-curl -X POST http://localhost:8080/admin/keys \
-  -H "Authorization: Bearer ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "dev-team",
-    "qpm_limit": 60,
-    "tpm_limit": 100000
-  }'
-
-# List keys
-curl http://localhost:8080/admin/keys \
-  -H "Authorization: Bearer ADMIN_KEY"
-
-# Get usage statistics
-curl http://localhost:8080/admin/usage \
-  -H "Authorization: Bearer ADMIN_KEY"
-```
-
-## Provider Types
-
-### Kiro (AWS Claude)
-
-Uses PKCE authentication flow. Configure via admin endpoints:
-
-```bash
-# Initiate Kiro login
-curl -X POST http://localhost:8080/admin/kiro/login \
-  -H "Authorization: Bearer ADMIN_KEY"
-
-# Check login status
-curl http://localhost:8080/admin/kiro/login/:id \
-  -H "Authorization: Bearer ADMIN_KEY"
-
-# Complete authentication
-curl -X POST http://localhost:8080/admin/kiro/login/complete/:id \
-  -H "Authorization: Bearer ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"code": "AUTH_CODE", "state": "STATE"}'
-```
-
-### GitHub Copilot
-
-Uses device flow authentication:
-
-```bash
-# Start device flow
-curl -X POST http://localhost:8080/admin/auth/device-code \
-  -H "Authorization: Bearer ADMIN_KEY"
-
-# Poll for token (after user authorizes)
-curl http://localhost:8080/admin/auth/poll/:id \
-  -H "Authorization: Bearer ADMIN_KEY"
-```
-
-### OpenAI
-
-Standard API key authentication:
-
-```json
-{
-  "name": "openai",
-  "type": "openai",
-  "api_key": "sk-...",
-  "base_url": "https://api.openai.com/v1"
-}
-```
-
-### Anthropic
-
-Direct Anthropic API:
-
-```json
-{
-  "name": "anthropic",
-  "type": "anthropic",
-  "api_key": "sk-ant-...",
-  "base_url": "https://api.anthropic.com"
-}
-```
-
-## Load Balancing Strategies
-
-| Strategy | Description |
-|----------|-------------|
-| `weighted` | Random selection weighted by provider weight |
-| `round-robin` | Sequential rotation through providers |
-| `least-used` | Select provider with lowest request count |
-| `priority` | Always select highest weight provider |
-| `smart` | Score-based: combines weight, recent 429 errors, and average latency |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/accounts` | GET/POST | List or create accounts |
+| `/admin/accounts/:id` | GET/PUT/DELETE | Manage an account |
+| `/admin/keys` | GET/POST | List or create API keys |
+| `/admin/keys/:id` | GET/PUT/DELETE | Manage API keys |
+| `/v1/chat/completions` | POST | OpenAI-compatible chat completions using the key default account |
+| `/v1/models` | GET | List Kiro models available to the key default account |
+| `/v1/messages` | POST | Anthropic-compatible messages using the key default account |
+| `/a/:kiro_account/v1/chat/completions` | POST | OpenAI-compatible chat completions |
+| `/a/:kiro_account/v1/models` | GET | List Kiro models available to the selected account |
+| `/a/:kiro_account/v1/messages` | POST | Anthropic-compatible messages |
+| `/admin/kiro/login` | POST | Start Kiro PKCE login |
+| `/admin/kiro/device-login` | POST | Start Kiro device-code login |
+| `/admin/kiro/import-local` | POST | Import local kiro-cli token |
+| `/admin/usage` | GET | Usage statistics |
 
 ## Development
 
-### Building
-
 ```bash
-# Format code
-make fmt
+go test ./...
+go build ./...
 
-# Run linter
-make lint
-
-# Build
-make build
-
-# Run tests
-make test
-
-# Run all checks
-make check
-
-# Build with injected version
-make build VERSION=v0.3.0
-```
-
-Version is injected at build time via ldflags:
-
-```bash
-go build -ldflags "-X github.com/pinealctx/anti-gateway/config.Version=v0.3.0" -o antigateway .
-```
-
-### Frontend Development
-
-```bash
 cd frontend
-npm install
-npm run dev    # Start dev server with hot reload
-npm run build  # Build for production (outputs to web/static)
+pnpm install
+pnpm run build
 ```
 
-### Pre-commit Hooks
-
-```bash
-make setup-hooks
-```
-
-This installs hooks for:
-- gitleaks (secret scanning)
-- go fmt
-- golangci-lint
-- build verification
-- test execution
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Clients                               │
-│              (OpenAI SDK / Anthropic SDK / curl)            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     AntiGateway                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Auth      │  │  Rate       │  │    Protocol         │  │
-│  │ Middleware  │──│  Limiter    │──│    Converter        │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│                          │                                   │
-│                          ▼                                   │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              Provider Registry                       │    │
-│  │         (Load Balancing + Health Checks)            │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┬───────────────┐
-          ▼               ▼               ▼               ▼
-     ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-     │  Kiro   │    │ OpenAI  │    │ Copilot │    │Anthropic│
-     └─────────┘    └─────────┘    └─────────┘    └─────────┘
-```
-
-## Metrics
-
-Prometheus metrics available at `/metrics`:
-
-- `antigateway_requests_total` - Total requests by provider, model, status
-- `antigateway_request_duration_seconds` - Request latency histogram
-- `antigateway_tokens_total` - Token usage by provider, model, type (input/output)
-- `antigateway_provider_health` - Provider health status (1=healthy, 0=unhealthy)
-- `antigateway_rate_limit_hits_total` - Rate limit violations
-
-## Acknowledgements
-
-Thanks to the following related projects:
-
-- [AntiHub-ALL](https://github.com/zhongruan0522/AntiHub-ALL) - Reference for Kiro provider implementation
-- [copilot2api-go](https://github.com/StarryKira/copilot2api-go) - GitHub Copilot provider implementation reference
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.
+The frontend production build is emitted to `web/static` and served by the Go binary at `/ui`.

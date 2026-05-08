@@ -93,7 +93,7 @@ export default function DashboardPage() {
         ]);
         setVersion(health.version);
         setProviderCount(providers.total);
-        setHealthyCount(providers.providers.filter((p) => p.healthy).length);
+        setHealthyCount(providers.accounts.filter((p) => p.healthy).length);
         setKeyCount(keys.total);
 
         // Calculate usage totals

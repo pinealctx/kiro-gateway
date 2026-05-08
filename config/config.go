@@ -10,11 +10,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Version is injected at build time via:
-// -ldflags "-X github.com/pinealctx/anti-gateway/config.Version=vX.Y.Z"
-// Default remains "dev" for local builds.
-var Version = "dev"
-
 // BindFlags registers persistent flags on the given cobra.Command.
 // Call this once during command initialization (e.g. in init()).
 func BindFlags(cmd *cobra.Command) {
@@ -26,20 +21,14 @@ func BindFlags(cmd *cobra.Command) {
 	f.StringP("log-level", "l", "info", "Log level: debug|info|warn|error (env: LOG_LEVEL)")
 
 	// Auth
-	f.StringP("api-key", "k", "", "API key for authentication (env: API_KEY)")
 	f.String("admin-key", "", "Admin key for /admin/* endpoints (env: ADMIN_KEY)")
-
-	// Defaults
-	f.StringP("model", "m", "claude-opus-4.6", "Default upstream model (env: DEFAULT_MODEL)")
-	f.String("lb-strategy", "smart", "Load balance strategy: weighted|round-robin|least-used|priority|smart (env: LB_STRATEGY)")
-	f.String("default-provider", "", "Default provider name (env: DEFAULT_PROVIDER)")
+	f.Bool("admin-local-only", true, "Restrict /admin/* endpoints to localhost clients (env: ADMIN_LOCAL_ONLY)")
 
 	// Health check
 	f.Bool("no-health-check", false, "Disable provider health checks (env: NO_HEALTH_CHECK)")
 	f.Int("health-check-interval", 60, "Health check interval in seconds (env: HEALTH_CHECK_INTERVAL)")
 
 	// Tenant
-	f.Bool("tenant", false, "Enable multi-tenant mode (env: TENANT_ENABLED)")
 	f.String("db-path", DefaultDBPath(), "SQLite database path (env: DB_PATH)")
 
 	// UI
@@ -54,22 +43,21 @@ func BindFlags(cmd *cobra.Command) {
 func DefaultDBPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return "antigateway.db"
+		return "kiro-gateway.db"
 	}
-	return filepath.Join(home, ".anti-gateway", "antigateway.db")
+	return filepath.Join(home, ".kiro-gateway", "kiro-gateway.db")
 }
 
 // LoadGatewayConfig loads the full gateway configuration.
-// Priority: config file → CLI flags → env → defaults.
-// If no config file is specified, returns a GatewayConfig synthesized from flags
-// with a single Kiro provider (backward-compatible mode).
+// Config path priority is --config > KIRO_GATEWAY_CONFIG.
+// With a config file, explicitly set CLI flags override file values.
+// Without a config file, priority is CLI flags > environment variables > defaults.
 func LoadGatewayConfig(cmd *cobra.Command) (*GatewayConfig, error) {
-	configFile := resolveStr(cmd, "config", "ANTIGATEWAY_CONFIG")
+	configFile := resolveStr(cmd, "config", "KIRO_GATEWAY_CONFIG")
 
 	if configFile != "" {
 		return loadFromFile(configFile, cmd)
 	}
-	// No config file: synthesize from flags (backward compatibility)
 	return synthesizeFromFlags(cmd), nil
 }
 
@@ -97,20 +85,13 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 		gw.Server.LogLevel, _ = cmd.Flags().GetString("log-level")
 		gw.Server.LogLevel = strings.ToLower(gw.Server.LogLevel)
 	}
-	if cmd.Flags().Changed("api-key") {
-		gw.Auth.APIKey, _ = cmd.Flags().GetString("api-key")
-	}
 	if cmd.Flags().Changed("admin-key") {
 		gw.Auth.AdminKey, _ = cmd.Flags().GetString("admin-key")
 	}
-	if cmd.Flags().Changed("model") {
-		gw.Defaults.Model, _ = cmd.Flags().GetString("model")
-	}
-	if cmd.Flags().Changed("lb-strategy") {
-		gw.Defaults.LBStrategy, _ = cmd.Flags().GetString("lb-strategy")
-	}
-	if cmd.Flags().Changed("default-provider") {
-		gw.Defaults.Provider, _ = cmd.Flags().GetString("default-provider")
+	if cmd.Flags().Changed("admin-local-only") {
+		gw.Auth.AdminLocalOnly, _ = cmd.Flags().GetBool("admin-local-only")
+	} else if !v.IsSet("auth.admin_local_only") {
+		gw.Auth.AdminLocalOnly = true
 	}
 	if cmd.Flags().Changed("no-health-check") {
 		noHealthCheck, _ := cmd.Flags().GetBool("no-health-check")
@@ -118,9 +99,6 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	}
 	if cmd.Flags().Changed("health-check-interval") {
 		gw.Defaults.HealthCheckSeconds, _ = cmd.Flags().GetInt("health-check-interval")
-	}
-	if cmd.Flags().Changed("tenant") {
-		gw.Tenant.Enabled, _ = cmd.Flags().GetBool("tenant")
 	}
 	if cmd.Flags().Changed("db-path") {
 		gw.Tenant.DBPath, _ = cmd.Flags().GetString("db-path")
@@ -137,12 +115,6 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 		gw.Server.LogLevel = "info"
 	} else {
 		gw.Server.LogLevel = strings.ToLower(gw.Server.LogLevel)
-	}
-	if gw.Defaults.Model == "" {
-		gw.Defaults.Model = "claude-opus-4.6"
-	}
-	if gw.Defaults.LBStrategy == "" {
-		gw.Defaults.LBStrategy = "smart"
 	}
 	if gw.Defaults.HealthCheckSeconds == 0 {
 		gw.Defaults.HealthCheckSeconds = 60
@@ -162,20 +134,14 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	logLevel := strings.ToLower(resolveStr(cmd, "log-level", "LOG_LEVEL"))
 
 	// Auth
-	apiKey := resolveStr(cmd, "api-key", "API_KEY")
 	adminKey := resolveStr(cmd, "admin-key", "ADMIN_KEY")
-
-	// Defaults
-	model := resolveStr(cmd, "model", "DEFAULT_MODEL")
-	lbStrategy := resolveStr(cmd, "lb-strategy", "LB_STRATEGY")
-	defaultProvider := resolveStr(cmd, "default-provider", "DEFAULT_PROVIDER")
+	adminLocalOnly := resolveBool(cmd, "admin-local-only", "ADMIN_LOCAL_ONLY")
 
 	// Health check
 	noHealthCheck := resolveBool(cmd, "no-health-check", "NO_HEALTH_CHECK")
 	healthCheckInterval := resolveInt(cmd, "health-check-interval", "HEALTH_CHECK_INTERVAL")
 
 	// Tenant
-	tenantEnabled := resolveBool(cmd, "tenant", "TENANT_ENABLED")
 	dbPath := resolveStr(cmd, "db-path", "DB_PATH")
 
 	// Apply defaults
@@ -187,12 +153,6 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	}
 	if logLevel == "" {
 		logLevel = "info"
-	}
-	if model == "" {
-		model = "claude-opus-4.6"
-	}
-	if lbStrategy == "" {
-		lbStrategy = "smart"
 	}
 	if healthCheckInterval == 0 {
 		healthCheckInterval = 60
@@ -208,19 +168,15 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 			LogLevel: logLevel,
 		},
 		Auth: AuthConfig{
-			APIKey:   apiKey,
-			AdminKey: adminKey,
+			AdminKey:       adminKey,
+			AdminLocalOnly: adminLocalOnly,
 		},
 		Defaults: DefaultsConfig{
-			Model:              model,
-			LBStrategy:         lbStrategy,
-			Provider:           defaultProvider,
 			HealthCheckEnabled: !noHealthCheck,
 			HealthCheckSeconds: healthCheckInterval,
 		},
 		Tenant: TenantConfig{
-			Enabled: tenantEnabled,
-			DBPath:  dbPath,
+			DBPath: dbPath,
 		},
 	}
 }

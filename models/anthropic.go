@@ -34,6 +34,8 @@ type AnthropicMessage struct {
 type AnthropicContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 	ID        string          `json:"id,omitempty"`          // for tool_use
 	Name      string          `json:"name,omitempty"`        // for tool_use
 	Input     json.RawMessage `json:"input,omitempty"`       // for tool_use

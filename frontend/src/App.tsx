@@ -8,11 +8,11 @@ import LoginPage from "./pages/Login";
 import DashboardPage from "./pages/Dashboard";
 import ProvidersPage from "./pages/Providers";
 import KeysPage from "./pages/Keys";
-import { isAuthenticated, clearAdminKey } from "./stores/auth";
+import { isAuthenticated, clearAuthCache } from "./stores/auth";
 import { I18nProvider, useI18n } from "./locales";
 
 // Theme storage key
-const THEME_KEY = "antigateway-theme";
+const THEME_KEY = "kiro-gateway-theme";
 
 type ThemeMode = "light" | "dark";
 
@@ -60,7 +60,7 @@ function AppContent() {
   }, [navigate]);
 
   const onLogout = useCallback(() => {
-    clearAdminKey();
+    clearAuthCache();
     setAuthed(false);
     navigate("/login");
   }, [navigate]);
@@ -132,8 +132,6 @@ function AppContent() {
             <Route path="providers" element={<ProvidersPage />} />
             <Route path="keys" element={<KeysPage />} />
           </Route>
-          {/* Redirect old routes */}
-          <Route path="/copilot" element={<Navigate to="/providers" replace />} />
           <Route path="/kiro" element={<Navigate to="/providers" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

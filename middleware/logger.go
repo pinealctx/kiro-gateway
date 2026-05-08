@@ -3,11 +3,12 @@ package middleware
 import (
 	"bytes"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/pinealctx/anti-gateway/core/logutil"
+	"github.com/pinealctx/kiro-gateway/core/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -56,10 +57,15 @@ func RequestID() gin.HandlerFunc {
 // Logger logs each request with latency, status, method, path.
 func Logger(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if !shouldLogRequest(path) {
+			c.Next()
+			return
+		}
+
 		debugEnabled := logger.Core().Enabled(zapcore.DebugLevel)
 
 		start := time.Now()
-		path := c.Request.URL.Path
 		method := c.Request.Method
 
 		var reqBodyRaw string
@@ -89,6 +95,14 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 		if reqID == nil {
 			reqID = ""
 		}
+		apiKeyID, _ := c.Get(CtxKeyTenantID)
+		if apiKeyID == nil {
+			apiKeyID = ""
+		}
+		apiKeyName, _ := c.Get(CtxKeyTenantName)
+		if apiKeyName == nil {
+			apiKeyName = ""
+		}
 
 		if debugEnabled {
 			reqPayload := logutil.RedactString(reqBodyRaw)
@@ -99,6 +113,8 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 
 			logger.Debug("http raw traffic",
 				zap.String("request_id", reqID.(string)),
+				zap.String("api_key_id", apiKeyID.(string)),
+				zap.String("api_key_name", apiKeyName.(string)),
 				zap.String("method", method),
 				zap.String("path", path),
 				zap.Int("status", status),
@@ -112,13 +128,31 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		logger.Debug("request",
-			zap.String("request_id", reqID.(string)),
-			zap.Int("status", status),
-			zap.String("method", method),
-			zap.String("path", path),
-			zap.Duration("latency", latency),
-			zap.String("client_ip", c.ClientIP()),
-		)
+		if shouldInfoLogRequest(path) {
+			logger.Info("runtime request",
+				zap.String("request_id", reqID.(string)),
+				zap.String("api_key_id", apiKeyID.(string)),
+				zap.String("api_key_name", apiKeyName.(string)),
+				zap.Int("status", status),
+				zap.String("method", method),
+				zap.String("path", path),
+				zap.Duration("latency", latency),
+				zap.String("client_ip", c.ClientIP()),
+			)
+		}
 	}
+}
+
+func shouldLogRequest(path string) bool {
+	return path == "/v1" ||
+		strings.HasPrefix(path, "/v1/") ||
+		strings.HasPrefix(path, "/a/") ||
+		path == "/admin" ||
+		strings.HasPrefix(path, "/admin/")
+}
+
+func shouldInfoLogRequest(path string) bool {
+	return path == "/v1" ||
+		strings.HasPrefix(path, "/v1/") ||
+		strings.HasPrefix(path, "/a/")
 }

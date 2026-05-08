@@ -33,11 +33,16 @@ const (
 
 // KiroLoginSession tracks a pending PKCE authorization code login flow.
 type KiroLoginSession struct {
-	ID           string `json:"id"`
-	AuthURL      string `json:"auth_url"`
-	CallbackPort int    `json:"callback_port"`
-	Status       string `json:"status"` // pending, completed, expired, error
-	Error        string `json:"error,omitempty"`
+	ID                string    `json:"id"`
+	AuthURL           string    `json:"auth_url"`
+	CallbackPort      int       `json:"callback_port"`
+	Status            string    `json:"status"` // pending, completed, expired, error
+	Error             string    `json:"error,omitempty"`
+	UserCode          string    `json:"user_code,omitempty"`
+	VerifyURI         string    `json:"verification_uri,omitempty"`
+	VerifyURIComplete string    `json:"verification_uri_complete,omitempty"`
+	Interval          int       `json:"interval,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at,omitempty"`
 
 	// PKCE internal state
 	state        string
@@ -153,6 +158,31 @@ func (am *KiroAuthManager) StartLogin(callbackPort int) (*KiroLoginSession, erro
 	am.logger.Info("Kiro PKCE login started",
 		zap.String("session_id", session.ID),
 		zap.Int("port", callbackPort))
+
+	return session, nil
+}
+
+// StartDeviceLogin initiates the AWS Builder ID device authorization flow directly.
+func (am *KiroAuthManager) StartDeviceLogin(idcRegion, startURL string) (*KiroLoginSession, error) {
+	session := &KiroLoginSession{
+		ID:        uuid.New().String(),
+		Status:    "pending",
+		builderID: true,
+		done:      make(chan struct{}),
+	}
+
+	if err := am.startBuilderIDDeviceFlow(session, idcRegion, startURL); err != nil {
+		return nil, err
+	}
+
+	am.mu.Lock()
+	am.sessions[session.ID] = session
+	am.mu.Unlock()
+
+	am.logger.Info("Kiro device login started",
+		zap.String("session_id", session.ID),
+		zap.String("user_code", session.UserCode),
+		zap.String("verify_url", session.VerifyURIComplete))
 
 	return session, nil
 }
@@ -380,7 +410,7 @@ func (am *KiroAuthManager) handleExternalIdPRedirect(session *KiroLoginSession, 
 	state := uuid.New().String()
 
 	// Discover OIDC endpoints; fall back to Azure AD URL pattern for Microsoft issuers.
-	authEndpoint, tokenEndpoint, discErr := oidcDiscover(issuerURL)
+	authEndpoint, tokenEndpoint, discErr := oidcDiscover(am.logger, issuerURL)
 	if discErr != nil {
 		am.logger.Warn("OIDC discovery failed, falling back to Azure AD URL pattern",
 			zap.String("issuer_url", issuerURL),
@@ -463,7 +493,16 @@ func (am *KiroAuthManager) handleExternalIdPCallback(session *KiroLoginSession, 
 	form.Set("scope", scopes)
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.PostForm(tokenEndpoint, form)
+	reqBody := []byte(form.Encode())
+	req, err := http.NewRequest(http.MethodPost, tokenEndpoint, bytes.NewReader(reqBody))
+	if err != nil {
+		am.failSession(session, "external IdP token request: "+err.Error())
+		writeCallbackHTML(w, false, "Token exchange failed")
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	debugKiroHTTPRequest(am.logger, "kiro auth request", req, reqBody)
+	resp, err := client.Do(req)
 	if err != nil {
 		am.failSession(session, "external IdP token exchange: "+err.Error())
 		writeCallbackHTML(w, false, "Token exchange failed")
@@ -472,6 +511,7 @@ func (am *KiroAuthManager) handleExternalIdPCallback(session *KiroLoginSession, 
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	debugKiroHTTPResponse(am.logger, "kiro auth response", resp, body)
 
 	if resp.StatusCode != http.StatusOK {
 		am.logger.Error("external IdP token exchange failed",
@@ -550,7 +590,9 @@ func (am *KiroAuthManager) completeSession(session *KiroLoginSession, tokenResul
 		zap.Bool("builder_id", session.builderID))
 
 	close(session.done)
-	go func() { _ = session.server.Close() }()
+	if session.server != nil {
+		go func() { _ = session.server.Close() }()
+	}
 }
 
 // exchangeCode exchanges an authorization code for tokens via the Kiro token endpoint.
@@ -562,13 +604,21 @@ func (am *KiroAuthManager) exchangeCode(session *KiroLoginSession, code string) 
 	form.Set("redirect_uri", fmt.Sprintf("http://localhost:%d", session.CallbackPort))
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.PostForm(kiroTokenExchangeURL, form)
+	reqBody := []byte(form.Encode())
+	req, err := http.NewRequest(http.MethodPost, kiroTokenExchangeURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	debugKiroHTTPRequest(am.logger, "kiro auth request", req, reqBody)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("exchange request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	debugKiroHTTPResponse(am.logger, "kiro auth response", resp, body)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("exchange failed (%d): %s", resp.StatusCode, string(body))
@@ -593,7 +643,9 @@ func (am *KiroAuthManager) failSession(session *KiroLoginSession, errMsg string)
 	default:
 		close(session.done)
 	}
-	go func() { _ = session.server.Close() }()
+	if session.server != nil {
+		go func() { _ = session.server.Close() }()
+	}
 }
 
 // handleBuilderIDRedirect processes the first callback from Kiro with login_option=builderid.
@@ -604,10 +656,20 @@ func (am *KiroAuthManager) failSession(session *KiroLoginSession, errMsg string)
 //  4. Poll create_token in the background until the user authorizes
 func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w http.ResponseWriter, r *http.Request) {
 	idcRegion := r.URL.Query().Get("idc_region")
+	startURL := r.URL.Query().Get("issuer_url")
+	if err := am.startBuilderIDDeviceFlow(session, idcRegion, startURL); err != nil {
+		am.failSession(session, err.Error())
+		writeCallbackHTML(w, false, "Device authorization failed")
+		return
+	}
+
+	writeBuilderIDDevicePage(w, session.UserCode, session.VerifyURIComplete)
+}
+
+func (am *KiroAuthManager) startBuilderIDDeviceFlow(session *KiroLoginSession, idcRegion, startURL string) error {
 	if idcRegion == "" {
 		idcRegion = "us-east-1"
 	}
-	startURL := r.URL.Query().Get("issuer_url")
 	if startURL == "" {
 		startURL = "https://view.awsapps.com/start"
 	}
@@ -634,21 +696,24 @@ func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w 
 		"grantTypes": []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"},
 		"issuerUrl":  startURL,
 	})
-	regResp, err := httpClient.Post(oidcBase+"/client/register", "application/json", bytes.NewReader(regBody))
+	regReq, err := http.NewRequest(http.MethodPost, oidcBase+"/client/register", bytes.NewReader(regBody))
 	if err != nil {
-		am.failSession(session, "AWS OIDC register: "+err.Error())
-		writeCallbackHTML(w, false, "Client registration failed")
-		return
+		return fmt.Errorf("create AWS OIDC register request: %w", err)
+	}
+	regReq.Header.Set("Content-Type", "application/json")
+	debugKiroHTTPRequest(am.logger, "kiro auth request", regReq, regBody)
+	regResp, err := httpClient.Do(regReq)
+	if err != nil {
+		return fmt.Errorf("AWS OIDC register: %w", err)
 	}
 	regRespBody, _ := io.ReadAll(io.LimitReader(regResp.Body, 32*1024))
 	_ = regResp.Body.Close()
+	debugKiroHTTPResponse(am.logger, "kiro auth response", regResp, regRespBody)
 	if regResp.StatusCode != http.StatusOK {
 		am.logger.Error("AWS OIDC client registration failed",
 			zap.Int("status", regResp.StatusCode),
 			zap.String("body", string(regRespBody)))
-		am.failSession(session, "AWS OIDC register failed")
-		writeCallbackHTML(w, false, "Client registration failed")
-		return
+		return fmt.Errorf("AWS OIDC register failed")
 	}
 	var regResult struct {
 		ClientID     string `json:"clientId"`
@@ -656,9 +721,7 @@ func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w 
 	}
 	_ = json.Unmarshal(regRespBody, &regResult)
 	if regResult.ClientID == "" {
-		am.failSession(session, "empty clientId from registration")
-		writeCallbackHTML(w, false, "Registration returned empty clientId")
-		return
+		return fmt.Errorf("empty clientId from registration")
 	}
 	am.logger.Info("AWS OIDC client registered", zap.String("client_id", regResult.ClientID))
 
@@ -668,21 +731,24 @@ func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w 
 		"clientSecret": regResult.ClientSecret,
 		"startUrl":     startURL,
 	})
-	authResp, err := httpClient.Post(oidcBase+"/device_authorization", "application/json", bytes.NewReader(authBody))
+	authReq, err := http.NewRequest(http.MethodPost, oidcBase+"/device_authorization", bytes.NewReader(authBody))
 	if err != nil {
-		am.failSession(session, "device_authorization: "+err.Error())
-		writeCallbackHTML(w, false, "Device authorization failed")
-		return
+		return fmt.Errorf("create device_authorization request: %w", err)
+	}
+	authReq.Header.Set("Content-Type", "application/json")
+	debugKiroHTTPRequest(am.logger, "kiro auth request", authReq, authBody)
+	authResp, err := httpClient.Do(authReq)
+	if err != nil {
+		return fmt.Errorf("device_authorization: %w", err)
 	}
 	authRespBody, _ := io.ReadAll(io.LimitReader(authResp.Body, 32*1024))
 	_ = authResp.Body.Close()
+	debugKiroHTTPResponse(am.logger, "kiro auth response", authResp, authRespBody)
 	if authResp.StatusCode != http.StatusOK {
 		am.logger.Error("device_authorization failed",
 			zap.Int("status", authResp.StatusCode),
 			zap.String("body", string(authRespBody)))
-		am.failSession(session, "device_authorization failed")
-		writeCallbackHTML(w, false, "Device authorization failed")
-		return
+		return fmt.Errorf("device_authorization failed")
 	}
 	var daResult struct {
 		DeviceCode              string `json:"deviceCode"`
@@ -694,9 +760,7 @@ func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w 
 	}
 	_ = json.Unmarshal(authRespBody, &daResult)
 	if daResult.DeviceCode == "" || daResult.UserCode == "" {
-		am.failSession(session, "device_authorization missing deviceCode/userCode")
-		writeCallbackHTML(w, false, "Device authorization incomplete")
-		return
+		return fmt.Errorf("device_authorization missing deviceCode/userCode")
 	}
 	if daResult.Interval < 1 {
 		daResult.Interval = 5
@@ -718,13 +782,17 @@ func (am *KiroAuthManager) handleBuilderIDRedirect(session *KiroLoginSession, w 
 	session.builderIDVerifyURI = daResult.VerificationURIComplete
 	session.builderIDInterval = daResult.Interval
 	session.builderIDTokenEndpoint = tokenEndpoint
+	session.UserCode = daResult.UserCode
+	session.VerifyURI = daResult.VerificationURI
+	session.VerifyURIComplete = daResult.VerificationURIComplete
+	session.Interval = daResult.Interval
+	if daResult.ExpiresIn > 0 {
+		session.ExpiresAt = time.Now().Add(time.Duration(daResult.ExpiresIn) * time.Second)
+	}
 	session.mu.Unlock()
 
-	// Step 3: Start background polling for device code completion
 	go am.pollBuilderIDDeviceCode(session)
-
-	// Step 4: Show the user a page with the code and verification URL
-	writeBuilderIDDevicePage(w, daResult.UserCode, daResult.VerificationURIComplete)
+	return nil
 }
 
 // pollBuilderIDDeviceCode polls the AWS SSO OIDC create_token endpoint
@@ -756,13 +824,21 @@ func (am *KiroAuthManager) pollBuilderIDDeviceCode(session *KiroLoginSession) {
 			"deviceCode":   deviceCode,
 			"grantType":    "urn:ietf:params:oauth:grant-type:device_code",
 		})
-		resp, err := httpClient.Post(oidcBase+"/token", "application/json", bytes.NewReader(reqBody))
+		req, err := http.NewRequest(http.MethodPost, oidcBase+"/token", bytes.NewReader(reqBody))
+		if err != nil {
+			am.logger.Warn("Builder ID poll request error", zap.Error(err))
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		debugKiroHTTPRequest(am.logger, "kiro auth request", req, reqBody)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			am.logger.Warn("Builder ID poll error", zap.Error(err))
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 		_ = resp.Body.Close()
+		debugKiroHTTPResponse(am.logger, "kiro auth response", resp, body)
 
 		if resp.StatusCode == http.StatusOK {
 			// Success!
@@ -896,14 +972,24 @@ h2{font-size:20px;margin-bottom:20px;color:#fff}
 // oidcDiscover fetches the OIDC discovery document from {issuer}/.well-known/openid-configuration
 // and returns the authorization_endpoint and token_endpoint.
 // This supports any standards-compliant IdP (Azure AD, Okta, Google, Ping Identity, AWS OIDC, etc.).
-func oidcDiscover(issuerURL string) (authEndpoint, tokenEndpoint string, err error) {
+func oidcDiscover(logger *zap.Logger, issuerURL string) (authEndpoint, tokenEndpoint string, err error) {
 	discoveryURL := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(discoveryURL)
+	req, err := http.NewRequest(http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("create OIDC discovery request: %w", err)
+	}
+	debugKiroHTTPRequest(logger, "kiro auth request", req, nil)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("OIDC discovery request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", "", fmt.Errorf("OIDC discovery read: %w", err)
+	}
+	debugKiroHTTPResponse(logger, "kiro auth response", resp, body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("OIDC discovery status: %d", resp.StatusCode)
 	}
@@ -911,7 +997,7 @@ func oidcDiscover(issuerURL string) (authEndpoint, tokenEndpoint string, err err
 		AuthorizationEndpoint string `json:"authorization_endpoint"`
 		TokenEndpoint         string `json:"token_endpoint"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&doc); err != nil {
+	if err := json.Unmarshal(body, &doc); err != nil {
 		return "", "", fmt.Errorf("OIDC discovery parse: %w", err)
 	}
 	if doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" {

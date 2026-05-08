@@ -37,7 +37,6 @@ func DefaultKiroDBPath() string {
 
 // ImportLocalToken reads the kiro-cli SQLite database and returns a LoginToken.
 // dbPath is the path to data.sqlite3; if empty, the platform default is used.
-// It tries the new external-idp token first, then falls back to the legacy IdC token.
 func ImportLocalToken(dbPath string) (*LoginToken, error) {
 	if dbPath == "" {
 		dbPath = DefaultKiroDBPath()
@@ -57,14 +56,11 @@ func ImportLocalToken(dbPath string) (*LoginToken, error) {
 		_ = db.Close()
 	}()
 
-	// Try new external-idp token first
 	lt, err := readExternalIdPToken(db)
 	if err == nil {
 		return lt, nil
 	}
-
-	// Fall back to legacy IdC token
-	lt, err = readLegacyIdCToken(db)
+	lt, err = readBuilderIDToken(db)
 	if err == nil {
 		return lt, nil
 	}
@@ -115,8 +111,8 @@ func readExternalIdPToken(db *sql.DB) (*LoginToken, error) {
 	return lt, nil
 }
 
-// readLegacyIdCToken reads the old-style Builder ID / IdC token from auth_kv.
-func readLegacyIdCToken(db *sql.DB) (*LoginToken, error) {
+// readBuilderIDToken reads AWS Builder ID / IAM Identity Center tokens from auth_kv.
+func readBuilderIDToken(db *sql.DB) (*LoginToken, error) {
 	var raw string
 	err := db.QueryRow("SELECT value FROM auth_kv WHERE key='kirocli:odic:token'").Scan(&raw)
 	if err != nil {
@@ -129,39 +125,30 @@ func readLegacyIdCToken(db *sql.DB) (*LoginToken, error) {
 		ExpiresAt    string `json:"expires_at"`
 	}
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		return nil, fmt.Errorf("parse legacy IdC token: %w", err)
+		return nil, fmt.Errorf("parse Builder ID token: %w", err)
 	}
 	if data.AccessToken == "" {
-		return nil, fmt.Errorf("empty access_token in legacy IdC token")
+		return nil, fmt.Errorf("empty access_token in Builder ID token")
 	}
 
-	// Read device registration for client_id/client_secret
-	var clientID, clientSecret string
 	var regRaw string
-	err = db.QueryRow("SELECT value FROM auth_kv WHERE key='kirocli:odic:device-registration'").Scan(&regRaw)
-	if err == nil {
-		var reg struct {
-			ClientID     string `json:"client_id"`
-			ClientSecret string `json:"client_secret"`
-		}
-		if json.Unmarshal([]byte(regRaw), &reg) == nil {
-			clientID = reg.ClientID
-			clientSecret = reg.ClientSecret
-		}
+	var reg struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
 	}
-
-	expiresAt := parseKiroTimestamp(data.ExpiresAt)
-	profileArn := readProfileArn(db)
+	if err := db.QueryRow("SELECT value FROM auth_kv WHERE key='kirocli:odic:device-registration'").Scan(&regRaw); err == nil {
+		_ = json.Unmarshal([]byte(regRaw), &reg)
+	}
 
 	return &LoginToken{
 		AccessToken:   data.AccessToken,
 		RefreshToken:  data.RefreshToken,
-		ClientID:      clientID,
-		ClientSecret:  clientSecret,
-		TokenEndpoint: "https://oidc.us-east-1.amazonaws.com/token", // legacy default
-		ExpiresAt:     expiresAt,
+		ClientID:      reg.ClientID,
+		ClientSecret:  reg.ClientSecret,
+		TokenEndpoint: "https://oidc.us-east-1.amazonaws.com/token",
+		ExpiresAt:     parseKiroTimestamp(data.ExpiresAt),
 		IsExternalIdP: false,
-		ProfileArn:    profileArn,
+		ProfileArn:    readProfileArn(db),
 	}, nil
 }
 

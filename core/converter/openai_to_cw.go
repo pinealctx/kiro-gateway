@@ -6,62 +6,38 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/pinealctx/anti-gateway/core/sanitizer"
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/core/sanitizer"
+	"github.com/pinealctx/kiro-gateway/core/thinking"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
-// KiroSupportedModels is the externally maintained model list for Kiro.
-// It is used for /v1/models listing only. Request conversion does not hard-map
-// one model to another (except minimal normalization in ResolveModel).
-var KiroSupportedModels = []string{
-	"claude-opus-4.6",
-	"claude-opus-4.6-1m",
-	"claude-opus-4-6",
-	"claude-sonnet-4.6",
-	"claude-sonnet-4.6-1m",
-	"claude-sonnet-4-6",
-	"claude-opus-4.5",
-	"claude-opus-4-5",
-	"claude-opus-4-5-20251101",
-	"claude-sonnet-4.5",
-	"claude-sonnet-4.5-1m",
-	"claude-sonnet-4-5",
-	"claude-sonnet-4-5-20250929",
-	"claude-sonnet-4",
-	"claude-sonnet-4-20250514",
-	"claude-haiku-4.5",
-	"claude-haiku-4-5",
-	"claude-haiku-4-5-20251001",
-	"claude-3-5-haiku-20241022",
-	"claude-3.7-sonnet",
-	"claude-3-7-sonnet-20250219",
-	"auto",
-	"deepseek-3.2",
-	"kimi-k2.5",
-	"minimax-m2.1",
-	"glm-4.7",
-	"glm-4.7-flash",
-	"qwen3-coder-next",
-	"agi-nova-beta-1m",
-	"gpt-4o",
-	"gpt-4o-mini",
-	"gpt-4-turbo",
-	"gpt-4",
-	"gpt-3.5-turbo",
+var kiroModelMap = map[string]string{
+	"claude-opus-4-7":    "claude-opus-4.7",
+	"claude-opus-4.7":    "claude-opus-4.7",
+	"claude-opus-4-7-1m": "claude-opus-4.7",
+	"claude-opus-4.7-1m": "claude-opus-4.7",
+
+	"claude-opus-4-6-1m": "claude-opus-4.6",
+	"claude-opus-4-6.1m": "claude-opus-4.6",
+	"claude-opus-4.6-1m": "claude-opus-4.6",
+	"claude-opus-4-6":    "claude-opus-4.6",
+	"claude-opus-4.6":    "claude-opus-4.6",
 }
 
-const DefaultModel = "claude-opus-4.6"
-
-// ResolveModel applies minimal normalization only.
+// ResolveModel applies the Kiro model aliases observed in kiro-bridge-go.
 // Behavior:
 //  1. trim spaces
-//  2. normalize Claude date suffix (claude-*-YYYYMMDD -> claude-*)
-//  3. pass-through for all other values
-//  4. empty model falls back to DefaultModel
+//  2. map known Kiro aliases / unsupported 1m variants to backend model ids
+//  3. normalize Claude date suffix (claude-*-YYYYMMDD -> claude-*)
+//  4. pass-through for all other values
+//  5. empty model remains empty; callers own model selection
 func ResolveModel(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return DefaultModel
+		return ""
+	}
+	if mapped, ok := kiroModelMap[model]; ok {
+		return mapped
 	}
 	if strings.HasPrefix(model, "claude-") {
 		parts := strings.Split(model, "-")
@@ -84,7 +60,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 	systemParts := []string{}
 	nonSystemMsgs := []models.ChatMessage{}
 	for _, msg := range req.Messages {
-		if msg.Role == "system" {
+		if msg.Role == "system" || msg.Role == "developer" {
 			systemParts = append(systemParts, contentToString(msg.Content))
 		} else {
 			nonSystemMsgs = append(nonSystemMsgs, msg)
@@ -92,7 +68,8 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 	}
 
 	hasTools := len(req.Tools) > 0
-	systemPrompt := sanitizer.BuildSystemPrompt(strings.Join(systemParts, "\n"), hasTools)
+	userSystem := thinking.InjectHint(strings.Join(systemParts, "\n"), thinking.ParseConfig(req.Extras))
+	systemPrompt := sanitizer.BuildSystemPrompt(userSystem, hasTools)
 
 	// 2. Convert tools
 	cwTools := convertTools(req.Tools)
@@ -207,7 +184,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 				images = append(images, imgs...)
 			}
 		case "tool":
-			text := contentToString(msg.Content)
+			text := toolResultText(msg.Content)
 			if len(text) > 50000 {
 				text = text[:50000]
 			}
@@ -265,11 +242,15 @@ func convertTools(tools []models.Tool) []models.CWTool {
 		if len(desc) > 10000 {
 			desc = desc[:10000]
 		}
+		var params any = t.Function.Parameters
+		if len(t.Function.Parameters) == 0 || string(t.Function.Parameters) == "null" {
+			params = map[string]any{}
+		}
 		cwTools = append(cwTools, models.CWTool{
 			ToolSpecification: models.CWToolSpec{
 				Name:        name,
 				Description: desc,
-				InputSchema: models.CWInputSchema{JSON: t.Function.Parameters},
+				InputSchema: models.CWInputSchema{JSON: params},
 			},
 		})
 	}
@@ -292,7 +273,7 @@ func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWH
 				images = append(images, imgs...)
 			}
 		case "tool":
-			text := contentToString(msg.Content)
+			text := toolResultText(msg.Content)
 			if len(text) > 50000 {
 				text = text[:50000]
 			}
@@ -331,6 +312,54 @@ func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWH
 // contentToString extracts text content from a ChatMessage.Content (json.RawMessage).
 func contentToString(content json.RawMessage) string {
 	return models.ContentText(content)
+}
+
+func toolResultText(content json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(content, &s); err == nil {
+		return parseToolResultString(s)
+	}
+
+	var parts []any
+	if err := json.Unmarshal(content, &parts); err == nil {
+		texts := make([]string, 0, len(parts))
+		for _, item := range parts {
+			if m, ok := item.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok {
+					texts = append(texts, text)
+					continue
+				}
+			}
+			b, _ := json.Marshal(item)
+			texts = append(texts, string(b))
+		}
+		return strings.Join(texts, "\n")
+	}
+
+	return contentToString(content)
+}
+
+func parseToolResultString(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "[") {
+		return text
+	}
+	var parts []any
+	if err := json.Unmarshal([]byte(trimmed), &parts); err != nil {
+		return text
+	}
+	texts := make([]string, 0, len(parts))
+	for _, item := range parts {
+		if m, ok := item.(map[string]any); ok {
+			if t, ok := m["text"].(string); ok {
+				texts = append(texts, t)
+				continue
+			}
+		}
+		b, _ := json.Marshal(item)
+		texts = append(texts, string(b))
+	}
+	return strings.Join(texts, "\n")
 }
 
 // extractImages pulls image data from content parts and converts to CW format.

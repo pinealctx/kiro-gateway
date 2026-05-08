@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
 // AnthropicToOpenAI converts an Anthropic messages request to OpenAI chat completion format.

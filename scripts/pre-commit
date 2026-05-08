@@ -1,5 +1,5 @@
 #!/bin/sh
-# anti-gateway pre-commit hook
+# kiro-gateway pre-commit hook
 # Installs with: make setup-hooks (copies to .git/hooks/pre-commit)
 #
 # Checks: gitleaks, go fmt, golangci-lint, go build, go test

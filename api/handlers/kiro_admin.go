@@ -2,10 +2,11 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	kiroProvider "github.com/pinealctx/anti-gateway/providers/kiro"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	kiroProvider "github.com/pinealctx/kiro-gateway/providers/kiro"
 )
 
 // KiroAdminHandler provides Kiro PKCE login management endpoints.
@@ -63,6 +64,59 @@ func (h *KiroAdminHandler) StartLogin(c *gin.Context) {
 		"auth_url": session.AuthURL,
 		"port":     session.CallbackPort,
 		"status":   session.Status,
+	})
+}
+
+// StartDeviceLogin initiates an AWS OIDC device-code login directly.
+// POST /admin/kiro/device-login?provider=<name>
+// Body: { "method": "organization", "idc_region": "us-east-1", "start_url": "https://your-org.awsapps.com/start" }
+func (h *KiroAdminHandler) StartDeviceLogin(c *gin.Context) {
+	providerName := c.Query("provider")
+	provider := h.findKiroProvider(providerName)
+	if provider == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no kiro provider configured"})
+		return
+	}
+
+	var req struct {
+		Method    string `json:"method"`
+		IDCRegion string `json:"idc_region"`
+		StartURL  string `json:"start_url"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	req.Method = strings.ToLower(strings.TrimSpace(req.Method))
+	req.IDCRegion = strings.TrimSpace(req.IDCRegion)
+	req.StartURL = strings.TrimSpace(req.StartURL)
+
+	switch req.Method {
+	case "", "organization", "your_organization", "org", "awsidc":
+		req.Method = "organization"
+		if req.StartURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "start_url is required for organization device login"})
+			return
+		}
+	case "builder_id", "builderid":
+		req.Method = "builder_id"
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported device login method"})
+		return
+	}
+
+	session, err := provider.AuthMgr().StartDeviceLogin(req.IDCRegion, req.StartURL)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":                        session.ID,
+		"user_code":                 session.UserCode,
+		"verification_uri":          session.VerifyURI,
+		"verification_uri_complete": session.VerifyURIComplete,
+		"interval":                  session.Interval,
+		"expires_at":                session.ExpiresAt,
+		"status":                    session.Status,
+		"method":                    req.Method,
 	})
 }
 
@@ -169,6 +223,46 @@ func (h *KiroAdminHandler) GetStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, provider.TokenStatus())
+}
+
+// GetUsageLimits shows the current Kiro subscription and quota limits.
+// GET /admin/kiro/usage-limits?provider=<name>
+func (h *KiroAdminHandler) GetUsageLimits(c *gin.Context) {
+	providerName := c.Query("provider")
+	provider := h.findKiroProvider(providerName)
+	if provider == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no kiro provider configured"})
+		return
+	}
+
+	limits, err := provider.GetUsageLimits(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, limits)
+}
+
+// GetModels lists models available to the selected Kiro account.
+// GET /admin/kiro/models?provider=<name>
+func (h *KiroAdminHandler) GetModels(c *gin.Context) {
+	providerName := c.Query("provider")
+	provider := h.findKiroProvider(providerName)
+	if provider == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no kiro provider configured"})
+		return
+	}
+
+	models, err := provider.ListModelDetails(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"provider": provider.Name(),
+		"models":   models,
+		"total":    len(models),
+	})
 }
 
 // RefreshToken forces a token refresh.

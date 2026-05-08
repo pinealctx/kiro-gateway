@@ -2,29 +2,29 @@ package handlers
 
 import (
 	"net/http"
-	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/pinealctx/anti-gateway/core/continuation"
-	"github.com/pinealctx/anti-gateway/core/converter"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	"github.com/pinealctx/anti-gateway/core/streaming"
-	"github.com/pinealctx/anti-gateway/middleware"
-	"github.com/pinealctx/anti-gateway/models"
-	copilotProvider "github.com/pinealctx/anti-gateway/providers/copilot"
+	"github.com/pinealctx/kiro-gateway/core/continuation"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/core/streaming"
+	"github.com/pinealctx/kiro-gateway/middleware"
+	"github.com/pinealctx/kiro-gateway/models"
+	"github.com/pinealctx/kiro-gateway/tenant"
 	"go.uber.org/zap"
 )
 
 // OpenAIHandler handles /v1/chat/completions requests.
 type OpenAIHandler struct {
 	registry *providers.Registry
+	store    *tenant.Store
 	logger   *zap.Logger
 }
 
-func NewOpenAIHandler(registry *providers.Registry, logger *zap.Logger) *OpenAIHandler {
-	return &OpenAIHandler{registry: registry, logger: logger}
+func NewOpenAIHandler(registry *providers.Registry, store *tenant.Store, logger *zap.Logger) *OpenAIHandler {
+	return &OpenAIHandler{registry: registry, store: store, logger: logger}
 }
 
 func (h *OpenAIHandler) ChatCompletions(c *gin.Context) {
@@ -35,20 +35,28 @@ func (h *OpenAIHandler) ChatCompletions(c *gin.Context) {
 		})
 		return
 	}
-
-	// Route: model prefix > API Key default provider > weighted selection
-	hint := middleware.GetDefaultProvider(c)
-	provider, ok := h.registry.ResolveWithHint(req.Model, hint)
-	if !ok {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": gin.H{"message": "No available provider for model: " + req.Model, "type": "server_error"},
+	if strings.TrimSpace(req.Model) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "model is required", "type": "invalid_request_error"},
 		})
 		return
 	}
 
-	// Strip prefix from model so upstream sees clean model name
-	_, cleanModel := providers.ParseModelPrefix(req.Model)
+	account, allowed := middleware.ResolveKiroAccount(c, c.Param("kiro_account"))
+	if !allowed {
+		return
+	}
+	provider, cleanModel, ok := resolveKiroAccount(h.registry, req.Model, account)
+	if !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{"message": "No available account for API key/model: " + req.Model, "type": "server_error"},
+		})
+		return
+	}
 	req.Model = cleanModel
+	if !middleware.CheckModelPermission(c, cleanModel) {
+		return
+	}
 
 	reqID := uuid.New().String()[:8]
 
@@ -60,21 +68,26 @@ func (h *OpenAIHandler) ChatCompletions(c *gin.Context) {
 }
 
 func (h *OpenAIHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, _ string) {
+	start := time.Now()
 	resp, err := provider.ChatCompletion(c.Request.Context(), req)
 	if err != nil {
-		middleware.ErrorsTotal.WithLabelValues("provider").Inc()
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{"message": err.Error(), "type": "upstream_error"},
 		})
 		return
 	}
-	if resp.Usage != nil {
-		middleware.RecordTokenUsage(c, resp.Usage.TotalTokens)
+	for i := range resp.Choices {
+		for j := range resp.Choices[i].Message.ToolCalls {
+			resp.Choices[i].Message.ToolCalls[j].ID = ensureOpenAIToolCallID(resp.Choices[i].Message.ToolCalls[j].ID)
+		}
 	}
+	inputTokens, outputTokens := estimateOpenAITokens(req.Messages, resp)
+	recordUsage(h.store, c, req.Model, provider.Name(), inputTokens, outputTokens, start)
 	c.JSON(http.StatusOK, resp)
 }
 
 func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, reqID string) {
+	start := time.Now()
 	completionID := "chatcmpl-" + reqID
 	writer := streaming.NewOpenAISSEWriter(c, req.Model, completionID)
 
@@ -110,9 +123,17 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvid
 				}
 			}
 
+			if chunk.ReasoningContent != "" {
+				if err := writer.WriteReasoningDelta(chunk.ReasoningContent); err != nil {
+					return
+				}
+			}
+
 			if len(chunk.ToolCalls) > 0 {
 				hasToolCalls = true
-				middleware.ToolCallsTotal.Add(float64(len(chunk.ToolCalls)))
+				for i := range chunk.ToolCalls {
+					chunk.ToolCalls[i].ID = ensureOpenAIToolCallID(chunk.ToolCalls[i].ID)
+				}
 				if err := writer.WriteToolCallDelta(chunk.ToolCalls); err != nil {
 					return
 				}
@@ -126,7 +147,6 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvid
 		// Check if we should auto-continue
 		if truncated && continueCount < continuation.MaxContinuations && continuation.ShouldAutoContinue(fullOutput, req.Messages) {
 			continueCount++
-			middleware.AutoContinueTriggered.Inc()
 			h.logger.Info("auto-continuing", zap.Int("round", continueCount))
 			req.Messages = continuation.BuildContinuationMessages(req.Messages, fullOutput)
 			continue
@@ -139,102 +159,31 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvid
 	if hasToolCalls {
 		finishReason = "tool_calls"
 	}
+	recordUsage(h.store, c, req.Model, provider.Name(), estimateInputTokens(req.Messages), len(fullOutput)/4, start)
 	_ = writer.WriteFinish(finishReason)
 }
 
 // Models handles /v1/models — returns available models.
 func (h *OpenAIHandler) Models(c *gin.Context) {
-	now := time.Now().Unix()
-	owners := make(map[string]string)
-
-	addModel := func(id, owner string) {
-		if id == "" {
-			return
-		}
-		if old, ok := owners[id]; ok && old != owner {
-			owners[id] = "multi"
-			return
-		}
-		owners[id] = owner
-	}
-
-	// Kiro externally maintained model list
-	for _, id := range converter.KiroSupportedModels {
-		addModel(id, "kiro")
-		addModel("kiro/"+id, "kiro")
-	}
-
-	// Copilot externally maintained list
-	for _, id := range copilotProvider.DefaultSupportedModels {
-		addModel(id, "copilot")
-		addModel("copilot/"+id, "copilot")
-	}
-
-	// Merge runtime-fetched models from configured Copilot providers (best-effort)
-	for name, p := range h.registry.All() {
-		if cp, ok := p.(*copilotProvider.Provider); ok {
-			for _, id := range cp.SupportedModels() {
-				addModel(id, "copilot")
-				addModel(name+"/"+id, "copilot")
-			}
-		}
-	}
-
-	ids := make([]string, 0, len(owners))
-	for id := range owners {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
-	modelList := make([]gin.H, 0, len(ids))
-	for _, id := range ids {
-		modelList = append(modelList, gin.H{
-			"id":       id,
-			"object":   "model",
-			"created":  now,
-			"owned_by": owners[id],
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   modelList,
-	})
-}
-
-// Embeddings handles POST /v1/embeddings.
-func (h *OpenAIHandler) Embeddings(c *gin.Context) {
-	var req models.EmbeddingRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{"message": "Invalid request body: " + err.Error(), "type": "invalid_request_error"},
-		})
+	account, ok := middleware.ResolveKiroAccount(c, c.Param("kiro_account"))
+	if !ok {
 		return
 	}
-
-	hint := middleware.GetDefaultProvider(c)
-	provider, ok := h.registry.ResolveWithHint(req.Model, hint)
+	provider, _, ok := resolveKiroAccount(h.registry, "", account)
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": gin.H{"message": "No available provider for model: " + req.Model, "type": "server_error"},
+			"error": gin.H{"message": "No available Kiro account for models", "type": "server_error"},
 		})
 		return
 	}
-
-	// Check if provider supports embeddings
-	ep, ok := provider.(providers.EmbeddingProvider)
+	lister, ok := provider.(providers.ModelLister)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{"message": "Provider does not support embeddings", "type": "invalid_request_error"},
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{"message": "Resolved account does not support model listing", "type": "upstream_error"},
 		})
 		return
 	}
-
-	// Strip prefix
-	_, cleanModel := providers.ParseModelPrefix(req.Model)
-	req.Model = cleanModel
-
-	resp, err := ep.CreateEmbedding(c.Request.Context(), &req)
+	modelIDs, err := lister.ListModels(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{"message": err.Error(), "type": "upstream_error"},
@@ -242,5 +191,55 @@ func (h *OpenAIHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
+	now := time.Now().Unix()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+
+	modelList := make([]gin.H, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		apiID := claudeCodeModelID(id)
+		modelList = append(modelList, gin.H{
+			"id":            apiID,
+			"display_name":  id,
+			"kiro_model_id": id,
+			"type":          "model",
+			"object":        "model",
+			"created":       now,
+			"created_at":    createdAt,
+			"owned_by":      provider.Name(),
+		})
+	}
+
+	resp := gin.H{
+		"object": "list",
+		"data":   modelList,
+	}
+	if len(modelList) > 0 {
+		resp["first_id"] = modelList[0]["id"]
+		resp["last_id"] = modelList[len(modelList)-1]["id"]
+		resp["has_more"] = false
+	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func estimateOpenAITokens(reqMessages []models.ChatMessage, resp *models.ChatCompletionResponse) (int, int) {
+	if resp != nil && resp.Usage != nil {
+		return resp.Usage.PromptTokens, resp.Usage.CompletionTokens
+	}
+	input := estimateInputTokens(reqMessages)
+	outputChars := 0
+	if resp != nil && len(resp.Choices) > 0 {
+		outputChars += len(models.ContentText(resp.Choices[0].Message.Content))
+		outputChars += len(resp.Choices[0].Message.ReasoningContent)
+		for _, tc := range resp.Choices[0].Message.ToolCalls {
+			outputChars += len(tc.Function.Name) + len(tc.Function.Arguments)
+		}
+	}
+	return input, outputChars / 4
+}
+
+func ensureOpenAIToolCallID(id string) string {
+	if id != "" {
+		return id
+	}
+	return "call_" + uuid.New().String()[:24]
 }

@@ -5,8 +5,6 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
-  Select,
   Switch,
   Tag,
   Space,
@@ -16,6 +14,10 @@ import {
   Empty,
   Tooltip,
   Card,
+  Progress,
+  Descriptions,
+  List,
+  Select,
 } from "antd";
 import {
   PlusOutlined,
@@ -24,10 +26,11 @@ import {
   DeleteOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  GithubOutlined,
   ThunderboltOutlined,
   StopOutlined,
   PlayCircleOutlined,
+  BarChartOutlined,
+  DatabaseOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -35,23 +38,26 @@ import {
   createProvider,
   updateProvider,
   deleteProvider,
+  getKiroUsageLimits,
+  getKiroModels,
   type ProviderRecord,
+  type KiroUsageLimits,
+  type KiroModelsResponse,
 } from "@/services/api";
-import CopilotAuthModal from "@/components/CopilotAuthModal";
 import KiroAuthModal from "@/components/KiroAuthModal";
 import { useT } from "@/locales";
 
 const { Title, Text } = Typography;
 
-const PROVIDER_TYPES = [
-  { label: "Kiro", value: "kiro" },
-  { label: "OpenAI", value: "openai" },
-  { label: "OpenAI Compatible", value: "openai-compat" },
-  { label: "Copilot", value: "copilot" },
-  { label: "Anthropic", value: "anthropic" },
-];
+const KIRO_REGION_OPTIONS = [
+  "us-east-1",
+  "us-west-2",
+  "eu-west-1",
+  "eu-central-1",
+  "ap-southeast-1",
+  "ap-northeast-1",
+].map((region) => ({ label: region, value: region }));
 
-// Status Badge Component
 function StatusBadge({ status, label }: { status: boolean; label: string }) {
   return (
     <span className={`status-badge ${status ? "success" : "error"}`}>
@@ -65,20 +71,23 @@ export default function ProvidersPage() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderRecord | null>(null);
+  const [kiroModalOpen, setKiroModalOpen] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderRecord | null>(null);
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quota, setQuota] = useState<KiroUsageLimits | null>(null);
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [models, setModels] = useState<KiroModelsResponse | null>(null);
   const [form] = Form.useForm();
   const { message } = App.useApp();
   const t = useT();
-
-  // Auth modal states
-  const [copilotModalOpen, setCopilotModalOpen] = useState(false);
-  const [kiroModalOpen, setKiroModalOpen] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderRecord | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const res = await listProviders();
-      setData(res.providers);
+      setData(res.accounts);
     } catch {
       message.error(t.providers.loadError);
     } finally {
@@ -93,22 +102,18 @@ export default function ProvidersPage() {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ weight: 100, enabled: true });
+    form.setFieldsValue({ enabled: true, region: "us-east-1" });
     setModalOpen(true);
   };
 
   const openEdit = (record: ProviderRecord) => {
     setEditing(record);
     form.setFieldsValue({
-      ...record,
-      models: record.models?.join(", ") ?? "",
+      name: record.name,
+      region: record.region || "us-east-1",
+      enabled: record.enabled,
     });
     setModalOpen(true);
-  };
-
-  const openCopilotAuth = (record: ProviderRecord) => {
-    setSelectedProvider(record);
-    setCopilotModalOpen(true);
   };
 
   const openKiroAuth = (record: ProviderRecord) => {
@@ -116,18 +121,43 @@ export default function ProvidersPage() {
     setKiroModalOpen(true);
   };
 
+  const openQuota = async (record: ProviderRecord) => {
+    setSelectedProvider(record);
+    setQuota(null);
+    setQuotaOpen(true);
+    setQuotaLoading(true);
+    try {
+      setQuota(await getKiroUsageLimits(record.name));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : t.providers.quotaLoadError);
+    } finally {
+      setQuotaLoading(false);
+    }
+  };
+
+  const openModels = async (record: ProviderRecord) => {
+    setSelectedProvider(record);
+    setModels(null);
+    setModelsOpen(true);
+    setModelsLoading(true);
+    try {
+      setModels(await getKiroModels(record.name));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : t.providers.modelsLoadError);
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      // Parse comma-separated models
-      const models = values.models
-        ? String(values.models)
-            .split(",")
-            .map((s: string) => s.trim())
-            .filter(Boolean)
-        : undefined;
-
-      const payload = { ...values, models };
+      const payload = {
+        name: values.name,
+        region: values.region,
+        enabled: values.enabled,
+        type: "kiro",
+      };
 
       if (editing) {
         await updateProvider(editing.id, payload);
@@ -177,7 +207,7 @@ export default function ProvidersPage() {
               message.success(t.common.copied);
             }}
           >
-            {id ? id.slice(0, 8) : "—"}
+            {id ? id.slice(0, 8) : "-"}
           </Tag>
         </Tooltip>
       ),
@@ -185,37 +215,26 @@ export default function ProvidersPage() {
     {
       title: t.common.name,
       dataIndex: "name",
-      width: 200,
+      width: 180,
       render: (name: string) => <Text strong>{name}</Text>,
     },
     {
-      title: t.common.type,
-      dataIndex: "type",
-      width: 110,
-      render: (type: string) => (
-        <Tag color="blue" className="font-mono text-xs">
-          {type}
-        </Tag>
-      ),
-    },
-    {
-      title: t.providers.fieldWeight,
-      dataIndex: "weight",
-      width: 80,
-      align: "center",
-      render: (v: number) => <Text code>{v}</Text>,
+      title: t.providers.fieldRegion,
+      dataIndex: "region",
+      width: 130,
+      render: (region: string) => <Tag className="font-mono text-xs">{region || "us-east-1"}</Tag>,
     },
     {
       title: t.common.enabled,
       dataIndex: "enabled",
-      width: 80,
+      width: 90,
       align: "center",
       render: (v: boolean) => <StatusBadge status={v} label={v ? t.common.yes : t.common.no} />,
     },
     {
       title: t.common.status,
       dataIndex: "healthy",
-      width: 80,
+      width: 90,
       align: "center",
       render: (v: boolean) =>
         v ? (
@@ -229,58 +248,40 @@ export default function ProvidersPage() {
         ),
     },
     {
-      title: t.providers.fieldModels,
-      dataIndex: "models",
-      ellipsis: true,
-      render: (models: string[]) =>
-        models?.length ? (
-          <div className="flex flex-wrap gap-1">
-            {models.slice(0, 3).map((m) => (
-              <Tag key={m} className="text-xs">
-                {m}
-              </Tag>
-            ))}
-            {models.length > 3 && (
-              <Tag className="text-xs">+{models.length - 3}</Tag>
-            )}
-          </div>
-        ) : (
-          <Tag>{t.common.all}</Tag>
-        ),
-    },
-    {
       title: t.common.actions,
-      ellipsis: true,
       fixed: "right",
+      width: 250,
       render: (_, record) => (
         <Space size="small">
-          {/* Type-specific auth actions */}
-          {record.type === "copilot" && (
-            <Tooltip title={t.copilot.authorize}>
-              <Button
-                type="link"
-                size="small"
-                icon={<GithubOutlined />}
-                onClick={() => openCopilotAuth(record)}
-                className="text-purple-500"
-              >
-                {t.providers.authorize}
-              </Button>
-            </Tooltip>
-          )}
-          {record.type === "kiro" && (
-            <Tooltip title={t.kiro.pkceLogin}>
-              <Button
-                type="link"
-                size="small"
-                icon={<ThunderboltOutlined />}
-                onClick={() => openKiroAuth(record)}
-                className="text-orange-500"
-              >
-                {t.providers.authorize}
-              </Button>
-            </Tooltip>
-          )}
+          <Tooltip title={t.kiro.pkceLogin}>
+            <Button
+              type="link"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => openKiroAuth(record)}
+              className="text-orange-500"
+            >
+              {t.providers.authorize}
+            </Button>
+          </Tooltip>
+          <Tooltip title={t.providers.quota}>
+            <Button
+              type="text"
+              size="small"
+              icon={<BarChartOutlined />}
+              onClick={() => openQuota(record)}
+              className="text-blue-500"
+            />
+          </Tooltip>
+          <Tooltip title={t.providers.models}>
+            <Button
+              type="text"
+              size="small"
+              icon={<DatabaseOutlined />}
+              onClick={() => openModels(record)}
+              className="text-purple-500"
+            />
+          </Tooltip>
           <Tooltip title={record.enabled ? t.providers.disable : t.providers.enable}>
             <Button
               type="text"
@@ -290,12 +291,7 @@ export default function ProvidersPage() {
               className={record.enabled ? "text-orange-500" : "text-green-500"}
             />
           </Tooltip>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openEdit(record)}
-          />
+          <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           <Popconfirm
             title={t.providers.deleteConfirm}
             description={t.providers.deleteDesc}
@@ -308,8 +304,6 @@ export default function ProvidersPage() {
       ),
     },
   ];
-
-  const selectedType = Form.useWatch("type", form);
 
   return (
     <div>
@@ -335,13 +329,10 @@ export default function ProvidersPage() {
           loading={loading}
           pagination={false}
           size="middle"
-          scroll={{ x: 600 }}
+          scroll={{ x: 820 }}
           locale={{
             emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={t.empty.noProviders}
-              >
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.empty.noProviders}>
                 <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                   {t.empty.createFirstProvider}
                 </Button>
@@ -351,7 +342,6 @@ export default function ProvidersPage() {
         />
       </Card>
 
-      {/* Provider Form Modal */}
       <Modal
         title={editing ? t.providers.editProvider : t.providers.addProvider}
         open={modalOpen}
@@ -359,79 +349,44 @@ export default function ProvidersPage() {
         onCancel={() => setModalOpen(false)}
         okText={editing ? t.common.save : t.common.create}
         cancelText={t.common.cancel}
-        width={560}
+        width={520}
         destroyOnClose
       >
         <Form form={form} layout="vertical" className="mt-4">
           <Form.Item
             name="name"
             label={t.providers.fieldName}
-            rules={[{ required: true, message: t.common.required }]}
+            rules={[
+              { required: true, message: t.common.required },
+              { pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, message: t.providers.fieldNameRule },
+            ]}
           >
             <Input placeholder={t.providers.fieldNamePlaceholder} disabled={!!editing} />
           </Form.Item>
           <Form.Item
-            name="type"
-            label={t.providers.fieldType}
+            name="region"
+            label={t.providers.fieldRegion}
             rules={[{ required: true, message: t.common.required }]}
           >
-            <Select options={PROVIDER_TYPES} placeholder={t.providers.fieldTypePlaceholder} disabled={!!editing} />
-          </Form.Item>
-          <Form.Item name="weight" label={t.providers.fieldWeight} tooltip={t.providers.fieldWeightTooltip}>
-            <InputNumber min={0} max={10000} className="w-full" />
+            <Select
+              showSearch
+              placeholder={t.providers.fieldRegionPlaceholder}
+              options={KIRO_REGION_OPTIONS}
+            />
           </Form.Item>
           {editing && (
             <Form.Item name="enabled" label={t.providers.fieldEnabled} valuePropName="checked">
               <Switch />
             </Form.Item>
           )}
-          {(selectedType === "openai" ||
-            selectedType === "openai-compat" ||
-            selectedType === "anthropic") && (
-            <>
-              <Form.Item name="base_url" label={t.providers.fieldBaseUrl}>
-                <Input placeholder={t.providers.fieldBaseUrlPlaceholder} />
-              </Form.Item>
-              <Form.Item name="api_key" label={t.providers.fieldApiKey}>
-                <Input.Password placeholder={t.providers.fieldApiKeyPlaceholder} />
-              </Form.Item>
-            </>
-          )}
-          {selectedType === "copilot" && (
-            <Form.Item
-              name="github_token"
-              label={t.providers.fieldGithubToken}
-            >
-              <Input.Password placeholder={t.providers.fieldGithubTokenPlaceholder} />
-            </Form.Item>
-          )}
-          <Form.Item name="models" label={t.providers.fieldModels}>
-            <Input placeholder={t.providers.fieldModelsPlaceholder} />
-          </Form.Item>
-          <Form.Item name="default_model" label={t.providers.fieldDefaultModel}>
-            <Input placeholder={t.providers.fieldDefaultModelPlaceholder} />
-          </Form.Item>
         </Form>
       </Modal>
 
-      {/* Copilot Auth Modal */}
-      {selectedProvider?.type === "copilot" && (
-        <CopilotAuthModal
-          open={copilotModalOpen}
-          providerName={selectedProvider.name}
-          onClose={() => {
-            setCopilotModalOpen(false);
-            setSelectedProvider(null);
-            fetchData();
-          }}
-        />
-      )}
-
-      {/* Kiro Auth Modal */}
-      {selectedProvider?.type === "kiro" && (
+      {selectedProvider && (
         <KiroAuthModal
           open={kiroModalOpen}
           providerName={selectedProvider.name}
+          providerRegion={selectedProvider.region}
           onClose={() => {
             setKiroModalOpen(false);
             setSelectedProvider(null);
@@ -439,6 +394,157 @@ export default function ProvidersPage() {
           }}
         />
       )}
+
+      <Modal
+        title={`${t.providers.quota} - ${selectedProvider?.name ?? ""}`}
+        open={quotaOpen}
+        onCancel={() => {
+          setQuotaOpen(false);
+          setQuota(null);
+        }}
+        footer={null}
+        width={620}
+        destroyOnClose
+      >
+        {quotaLoading ? (
+          <div className="flex justify-center py-10">
+            <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+          </div>
+        ) : quota ? (
+          <div className="space-y-5">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Text strong>{quota.usage.display_name || quota.usage.resource_type || t.providers.quotaCredits}</Text>
+                <Text type="secondary">
+                  {formatNumber(quota.usage.used_precise || quota.usage.used)} / {formatNumber(quota.usage.limit_precise || quota.usage.limit)}
+                </Text>
+              </div>
+              <Progress percent={Math.min(100, Math.round(quota.usage.percent_used || 0))} />
+            </div>
+            <Descriptions column={2} bordered size="small">
+              <Descriptions.Item label={t.providers.quotaTier}>{quota.tier || "-"}</Descriptions.Item>
+              <Descriptions.Item label={t.providers.quotaRemaining}>
+                {formatNumber(quota.usage.remaining_precise || quota.usage.remaining)}
+              </Descriptions.Item>
+              <Descriptions.Item label={t.providers.quotaResetDays}>{quota.days_until_reset ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label={t.providers.quotaEmail}>{quota.email || "-"}</Descriptions.Item>
+              <Descriptions.Item label={t.providers.quotaStatus}>{quota.subscription_state || "-"}</Descriptions.Item>
+              <Descriptions.Item label={t.providers.quotaFetchedAt}>{quota.fetched_at ? new Date(quota.fetched_at).toLocaleString() : "-"}</Descriptions.Item>
+            </Descriptions>
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.providers.quotaNoData} />
+        )}
+      </Modal>
+
+      <Modal
+        title={`${t.providers.models} - ${selectedProvider?.name ?? ""}`}
+        open={modelsOpen}
+        onCancel={() => {
+          setModelsOpen(false);
+          setModels(null);
+        }}
+        footer={null}
+        width={920}
+        className="models-modal"
+        destroyOnClose
+      >
+        {modelsLoading ? (
+          <div className="flex justify-center py-10">
+            <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+          </div>
+        ) : models?.models?.length ? (
+          <div className="models-panel">
+            <div className="models-summary">
+              <span className="models-summary-item">
+                <DatabaseOutlined />
+                {t.providers.modelsTotal}: <strong>{models.total}</strong>
+              </span>
+              {models.models.find((model) => model.is_default) && (
+                <span className="models-summary-item models-summary-default">
+                  {t.providers.modelsKiroDefault}: <strong>{models.models.find((model) => model.is_default)?.model_id}</strong>
+                </span>
+              )}
+            </div>
+            <List
+              dataSource={models.models}
+              className="models-list"
+              renderItem={(model) => (
+                <List.Item
+                  key={model.model_id}
+                  className={`models-row ${model.is_default ? "is-default" : ""}`}
+                >
+                  <div className="models-row-main">
+                    <div className="models-row-title">
+                      <div className="min-w-0">
+                        <Text
+                          strong
+                          copyable={{ text: model.model_id }}
+                          className="models-id"
+                        >
+                          {model.model_id}
+                        </Text>
+                        <Text type="secondary" className="models-description">
+                          {model.description || "-"}
+                        </Text>
+                      </div>
+                      <Tag className="models-rate">
+                        {formatRate(model.rate_multiplier, model.rate_unit)}
+                      </Tag>
+                    </div>
+
+                    <div className="models-meta">
+                      <div className="models-meta-cell">
+                        <Text type="secondary" className="models-meta-label">
+                          {t.providers.modelsInputTypes}
+                        </Text>
+                        <div className="models-tag-list">
+                          {(model.supported_input_types?.length ? model.supported_input_types : ["-"]).map((type) => (
+                            <Tag key={type} className="models-type-tag">{type}</Tag>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="models-meta-cell">
+                        <Text type="secondary" className="models-meta-label">
+                          {t.providers.modelsTokenLimits}
+                        </Text>
+                        <Text className="models-token-limit">
+                          {formatTokenLimits(model.token_limits)}
+                        </Text>
+                      </div>
+                      <div className="models-meta-cell">
+                        <Text type="secondary" className="models-meta-label">
+                          {t.providers.modelsPromptCaching}
+                        </Text>
+                        <Tag className={model.prompt_caching?.supports_prompt_caching ? "models-cache-tag is-on" : "models-cache-tag"}>
+                          {model.prompt_caching?.supports_prompt_caching ? t.common.yes : t.common.no}
+                        </Tag>
+                      </div>
+                    </div>
+                  </div>
+                </List.Item>
+              )}
+            />
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.providers.modelsNoData} />
+        )}
+      </Modal>
     </div>
   );
+}
+
+function formatNumber(value?: number) {
+  if (value == null || Number.isNaN(value)) return "-";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatTokenLimits(limits?: { max_input_tokens: number; max_output_tokens: number }) {
+  if (!limits) return "-";
+  return `${formatNumber(limits.max_input_tokens)} in / ${formatNumber(limits.max_output_tokens)} out`;
+}
+
+function formatRate(multiplier?: number, unit?: string) {
+  if (multiplier == null || Number.isNaN(multiplier)) return "-";
+  return `${multiplier}x ${unit || ""}`.trim();
 }

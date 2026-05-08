@@ -3,26 +3,30 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/pinealctx/anti-gateway/core/continuation"
-	"github.com/pinealctx/anti-gateway/core/converter"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	"github.com/pinealctx/anti-gateway/core/streaming"
-	"github.com/pinealctx/anti-gateway/middleware"
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/core/continuation"
+	"github.com/pinealctx/kiro-gateway/core/converter"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/core/streaming"
+	"github.com/pinealctx/kiro-gateway/middleware"
+	"github.com/pinealctx/kiro-gateway/models"
+	"github.com/pinealctx/kiro-gateway/tenant"
 	"go.uber.org/zap"
 )
 
 // AnthropicHandler handles /v1/messages requests.
 type AnthropicHandler struct {
 	registry *providers.Registry
+	store    *tenant.Store
 	logger   *zap.Logger
 }
 
-func NewAnthropicHandler(registry *providers.Registry, logger *zap.Logger) *AnthropicHandler {
-	return &AnthropicHandler{registry: registry, logger: logger}
+func NewAnthropicHandler(registry *providers.Registry, store *tenant.Store, logger *zap.Logger) *AnthropicHandler {
+	return &AnthropicHandler{registry: registry, store: store, logger: logger}
 }
 
 func (h *AnthropicHandler) Messages(c *gin.Context) {
@@ -31,6 +35,14 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "invalid_request_error", "message": "Invalid request body: " + err.Error()},
+		})
+		return
+	}
+	req.Model = normalizeGatewayModelID(req.Model)
+	if strings.TrimSpace(req.Model) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":  "error",
+			"error": gin.H{"type": "invalid_request_error", "message": "model is required"},
 		})
 		return
 	}
@@ -45,20 +57,22 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	// Route: model prefix > API Key default provider > weighted selection
-	hint := middleware.GetDefaultProvider(c)
-	provider, ok := h.registry.ResolveWithHint(openaiReq.Model, hint)
+	account, allowed := middleware.ResolveKiroAccount(c, c.Param("kiro_account"))
+	if !allowed {
+		return
+	}
+	provider, cleanModel, ok := resolveKiroAccount(h.registry, openaiReq.Model, account)
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"type":  "error",
-			"error": gin.H{"type": "api_error", "message": "No available provider for model: " + req.Model},
+			"error": gin.H{"type": "api_error", "message": "No available account for API key/model: " + req.Model},
 		})
 		return
 	}
-
-	// Strip prefix from model so upstream sees clean model name
-	_, cleanModel := providers.ParseModelPrefix(openaiReq.Model)
 	openaiReq.Model = cleanModel
+	if !middleware.CheckModelPermission(c, cleanModel) {
+		return
+	}
 
 	reqID := "msg_" + uuid.New().String()[:8]
 
@@ -88,10 +102,10 @@ func estimateInputTokens(messages []models.ChatMessage) int {
 
 func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string) {
 	setAnthropicHeaders(c, reqID)
+	start := time.Now()
 
 	resp, err := provider.ChatCompletion(c.Request.Context(), req)
 	if err != nil {
-		middleware.ErrorsTotal.WithLabelValues("provider").Inc()
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "api_error", "message": err.Error()},
@@ -110,6 +124,12 @@ func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AI
 
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
+		if choice.Message.ReasoningContent != "" {
+			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
+				Type:     "thinking",
+				Thinking: choice.Message.ReasoningContent,
+			})
+		}
 		if content := models.ContentText(choice.Message.Content); content != "" {
 			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 				Type: "text",
@@ -124,7 +144,7 @@ func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AI
 			}
 			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 				Type:  "tool_use",
-				ID:    tc.ID,
+				ID:    ensureAnthropicToolUseID(tc.ID),
 				Name:  tc.Function.Name,
 				Input: inputRaw,
 			})
@@ -140,16 +160,17 @@ func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AI
 			anthropicResp.StopReason = "end_turn"
 		}
 	}
-
-	if resp.Usage != nil {
-		middleware.RecordTokenUsage(c, resp.Usage.TotalTokens)
-	}
+	inputTokens, outputTokens := estimateOpenAITokens(req.Messages, resp)
+	anthropicResp.Usage.InputTokens = inputTokens
+	anthropicResp.Usage.OutputTokens = outputTokens
+	recordUsage(h.store, c, req.Model, provider.Name(), inputTokens, outputTokens, start)
 
 	c.JSON(http.StatusOK, anthropicResp)
 }
 
 func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string) {
 	setAnthropicHeaders(c, reqID)
+	start := time.Now()
 
 	inputTokens := estimateInputTokens(req.Messages)
 	writer := streaming.NewAnthropicSSEWriter(c, model, reqID)
@@ -161,6 +182,8 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 	var fullOutput string
 	textStarted := false
 	textClosed := false
+	thinkingStarted := false
+	thinkingClosed := false
 	hasToolUse := false
 	continueCount := 0
 	toolBlockOpen := false // track whether a tool_use content block is open
@@ -223,6 +246,13 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 					_ = writer.WriteContentBlockStop()
 					toolBlockOpen = false
 				}
+				if thinkingStarted && !thinkingClosed {
+					if err := writer.WriteContentBlockStop(); err != nil {
+						return
+					}
+					thinkingStarted = false
+					thinkingClosed = false
+				}
 				if !textStarted {
 					if err := writer.WriteContentBlockStart(); err != nil {
 						return
@@ -235,6 +265,30 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 				}
 			}
 
+			if chunk.ReasoningContent != "" {
+				if toolBlockOpen {
+					_ = writer.WriteContentBlockStop()
+					toolBlockOpen = false
+				}
+				if textStarted && !textClosed {
+					if err := writer.WriteContentBlockStop(); err != nil {
+						return
+					}
+					textStarted = false
+					textClosed = false
+				}
+				if !thinkingStarted {
+					if err := writer.WriteThinkingBlockStart(); err != nil {
+						return
+					}
+					thinkingStarted = true
+				}
+				fullOutput += chunk.ReasoningContent
+				if err := writer.WriteThinkingDelta(chunk.ReasoningContent); err != nil {
+					return
+				}
+			}
+
 			if len(chunk.ToolCalls) > 0 {
 				hasToolUse = true
 
@@ -243,24 +297,32 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 					if err := writer.WriteContentBlockStop(); err != nil {
 						return
 					}
-					textClosed = true
+					textStarted = false
+					textClosed = false
+				}
+				if thinkingStarted && !thinkingClosed {
+					if err := writer.WriteContentBlockStop(); err != nil {
+						return
+					}
+					thinkingStarted = false
+					thinkingClosed = false
 				}
 
 				for _, tc := range chunk.ToolCalls {
 					// tc.ID != "" means a new tool_call is starting
 					// (subsequent deltas for the same call have empty ID)
-					if tc.ID != "" {
+					if tc.ID != "" || tc.Function.Name != "" {
 						// Close previous tool block if open
 						if toolBlockOpen {
 							if err := writer.WriteContentBlockStop(); err != nil {
 								return
 							}
 						}
-						if err := writer.WriteToolUseBlockStart(tc.ID, tc.Function.Name); err != nil {
+						toolID := ensureAnthropicToolUseID(tc.ID)
+						if err := writer.WriteToolUseBlockStart(toolID, tc.Function.Name); err != nil {
 							return
 						}
 						toolBlockOpen = true
-						middleware.ToolCallsTotal.Inc()
 					}
 
 					// Append arguments delta to current block
@@ -292,7 +354,6 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 
 		if truncated && !hasToolUse && continueCount < continuation.MaxContinuations && continuation.ShouldAutoContinue(fullOutput, req.Messages) {
 			continueCount++
-			middleware.AutoContinueTriggered.Inc()
 			h.logger.Info("auto-continuing (anthropic)", zap.Int("round", continueCount))
 			req.Messages = continuation.BuildContinuationMessages(req.Messages, fullOutput)
 			continue
@@ -305,12 +366,16 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 	if textStarted && !textClosed {
 		_ = writer.WriteContentBlockStop()
 	}
+	if thinkingStarted && !thinkingClosed {
+		_ = writer.WriteContentBlockStop()
+	}
 
 	stopReason := "end_turn"
 	if hasToolUse {
 		stopReason = "tool_use"
 	}
 	outputTokens := len(fullOutput) / 4
+	recordUsage(h.store, c, req.Model, provider.Name(), inputTokens, outputTokens, start)
 	_ = writer.WriteMessageDelta(stopReason, outputTokens)
 	_ = writer.WriteMessageStop()
 }
@@ -331,6 +396,13 @@ func (h *AnthropicHandler) CountTokens(c *gin.Context) {
 		})
 		return
 	}
+	if _, ok := middleware.ResolveKiroAccount(c, c.Param("kiro_account")); !ok {
+		return
+	}
+	req.Model = normalizeGatewayModelID(req.Model)
+	if !middleware.CheckModelPermission(c, req.Model) {
+		return
+	}
 
 	totalChars := len(string(req.System))
 	for _, msg := range req.Messages {
@@ -344,4 +416,11 @@ func (h *AnthropicHandler) CountTokens(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"input_tokens": estimated,
 	})
+}
+
+func ensureAnthropicToolUseID(id string) string {
+	if id != "" {
+		return id
+	}
+	return "toolu_" + uuid.New().String()[:24]
 }

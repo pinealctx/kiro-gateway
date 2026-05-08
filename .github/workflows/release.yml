@@ -24,10 +24,10 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Build frontend assets
-        working-directory: web
+        working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm build
@@ -44,7 +44,7 @@ jobs:
           set -euo pipefail
 
           VERSION="${GITHUB_REF_NAME}"
-          LDFLAGS="-s -w -X github.com/pinealctx/anti-gateway/internal/config.Version=${VERSION}"
+          LDFLAGS="-s -w -X github.com/pinealctx/kiro-gateway/version.Version=${VERSION}"
 
           mkdir -p dist
           platforms=(
@@ -63,12 +63,12 @@ jobs:
               EXT=".exe"
             fi
 
-            PKG="antigateway_${VERSION}_${GOOS}_${GOARCH}"
+            PKG="kiro-gateway_${VERSION}_${GOOS}_${GOARCH}"
             OUTDIR="dist/${PKG}"
             mkdir -p "$OUTDIR"
 
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -trimpath -ldflags "$LDFLAGS" -o "$OUTDIR/antigateway${EXT}" ./cmd/server
+              go build -trimpath -ldflags "$LDFLAGS" -o "$OUTDIR/kiro-gateway${EXT}" .
 
             cp config.example.yaml "$OUTDIR/config.example.yaml"
             cp LICENSE "$OUTDIR/LICENSE"

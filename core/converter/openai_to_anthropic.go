@@ -3,7 +3,7 @@ package converter
 import (
 	"encoding/json"
 
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
 // OpenAIToAnthropic converts an OpenAI chat completion request to Anthropic messages format.

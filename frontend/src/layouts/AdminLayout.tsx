@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Layout, Menu, Button, Typography, Tooltip, Drawer } from "antd";
+import { App, Layout, Menu, Button, Typography, Tooltip, Drawer } from "antd";
 import {
   DashboardOutlined,
   CloudServerOutlined,
@@ -52,6 +52,7 @@ export default function AdminLayout({ onLogout, themeMode, onToggleTheme }: Prop
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const { t, lang, toggleLang } = useI18n();
+  const { modal } = App.useApp();
 
   // Menu items with translations
   const menuItems = [
@@ -84,6 +85,17 @@ export default function AdminLayout({ onLogout, themeMode, onToggleTheme }: Prop
     }
   };
 
+  const confirmLogout = () => {
+    modal.confirm({
+      title: t.nav.logoutConfirmTitle,
+      content: t.nav.logoutConfirmDesc,
+      okText: t.nav.logout,
+      cancelText: t.common.cancel,
+      okButtonProps: { danger: true },
+      onOk: onLogout,
+    });
+  };
+
   // Logo component
   const Logo = (
     <div className="flex items-center gap-2 px-4">
@@ -92,7 +104,7 @@ export default function AdminLayout({ onLogout, themeMode, onToggleTheme }: Prop
       </div>
       {(!collapsed || isMobile) && (
         <Typography.Title level={5} className="!mb-0 !text-inherit transition-all duration-200">
-          AntiGateway
+          Kiro Gateway
         </Typography.Title>
       )}
     </div>
@@ -219,7 +231,7 @@ export default function AdminLayout({ onLogout, themeMode, onToggleTheme }: Prop
 
             {/* Logout */}
             <Tooltip title={t.nav.logout}>
-              <Button type="text" icon={<LogoutOutlined />} onClick={onLogout} danger />
+              <Button type="text" icon={<LogoutOutlined />} onClick={confirmLogout} danger />
             </Tooltip>
           </div>
         </Header>

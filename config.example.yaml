@@ -1,32 +1,30 @@
-# AntiGateway Configuration Example
-# Copy to config.yaml and modify as needed.
+# Kiro Gateway configuration example.
+# Accounts are managed dynamically via the Admin API:
+#   POST   /admin/accounts        — add an account
+#   GET    /admin/accounts        — list accounts
+#   PUT    /admin/accounts/:id    — update an account
+#   DELETE /admin/accounts/:id    — remove an account
 #
-# Providers are managed dynamically via the Admin API:
-#   POST   /admin/providers        — add a provider
-#   GET    /admin/providers        — list providers
-#   PUT    /admin/providers/:id    — update a provider
-#   DELETE /admin/providers/:id    — remove a provider
+# API keys must bind to one or more accounts with kiro_accounts
+# and a kiro_default_account. Runtime account selection:
+#   /v1/messages                         -> key default account
+#   /v1/chat/completions                -> key default account
+#   /a/{kiro_account}/v1/chat/completions
+#   /a/{kiro_account}/v1/messages
 
 server:
   host: "0.0.0.0"
   port: 8080
   log_level: "info"   # debug | info | warn | error
-  cors_origins: []    # Allowed CORS origins; empty = allow all (dev). Example: ["https://myapp.com"]
+  cors_origins: []    # empty = allow all
 
 auth:
-  api_key: ""          # Leave empty to disable API auth; set to require Bearer token
-  admin_key: ""        # Separate key for /admin/* endpoints; leave empty = no admin auth
+  admin_key: ""        # separate key for /admin/* endpoints; empty = generated on startup
+  admin_local_only: true # restrict /admin/* to localhost even when runtime APIs listen on 0.0.0.0
 
 defaults:
-  provider: ""             # Fallback provider name (empty = first registered provider)
-  model: "claude-opus-4.6"
-  lb_strategy: "smart"     # weighted | round-robin | least-used | priority | smart
-  health_check_enabled: true   # Enable periodic provider health checks
-  health_check_seconds: 60     # Health check interval in seconds (default 60)
+  health_check_enabled: true
+  health_check_seconds: 60
 
-# Multi-tenant mode: per-key auth, rate limiting, usage tracking.
-# The SQLite DB is always created (for provider storage); this flag
-# controls whether per-key tenant auth is enforced on the API routes.
 tenant:
-  enabled: false       # true = per-key auth with rate limits; false = single api_key auth
-  db_path: "antigateway.db"
+  db_path: "kiro-gateway.db"

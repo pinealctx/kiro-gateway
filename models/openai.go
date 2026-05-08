@@ -57,12 +57,13 @@ func (r ChatCompletionRequest) MarshalJSON() ([]byte, error) {
 // Content is json.RawMessage so it can hold either a JSON string ("hello")
 // or an array of content parts ([{"type":"text","text":"..."}]) transparently.
 type ChatMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	Name       string          `json:"name,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Refusal    string          `json:"refusal,omitempty"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content"`
+	Name             string          `json:"name,omitempty"`
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	Refusal          string          `json:"refusal,omitempty"`
+	ReasoningContent string          `json:"reasoning_content,omitempty"`
 }
 
 type Tool struct {
@@ -172,8 +173,9 @@ type ChatCompletionChunkChoice struct {
 }
 
 type ChatCompletionDelta struct {
-	Role      string     `json:"role,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	Refusal   string     `json:"refusal,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role             string     `json:"role,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	Refusal          string     `json:"refusal,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }

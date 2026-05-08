@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,16 +15,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pinealctx/anti-gateway/api/routes"
-	"github.com/pinealctx/anti-gateway/config"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	anthropicProvider "github.com/pinealctx/anti-gateway/providers/anthropic"
-	copilotProvider "github.com/pinealctx/anti-gateway/providers/copilot"
-	"github.com/pinealctx/anti-gateway/providers/kiro"
-	openaiProvider "github.com/pinealctx/anti-gateway/providers/openai"
-	"github.com/pinealctx/anti-gateway/tenant"
+	"github.com/pinealctx/kiro-gateway/api/routes"
+	"github.com/pinealctx/kiro-gateway/config"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/providers/kiro"
+	"github.com/pinealctx/kiro-gateway/tenant"
+	"github.com/pinealctx/kiro-gateway/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
@@ -35,10 +33,10 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "antigateway",
-	Short:   "AntiGateway - Unified AI Gateway",
-	Long:    "AntiGateway is a standalone AI gateway that proxies OpenAI / Anthropic protocols to multiple upstream providers.",
-	Version: config.Version,
+	Use:     "kiro-gateway",
+	Short:   "Kiro Gateway",
+	Long:    "Kiro Gateway exposes OpenAI / Anthropic-compatible endpoints with multiple accounts.",
+	Version: version.Get(),
 	RunE:    runServe,
 }
 
@@ -47,20 +45,16 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
+	bootstrapLogger, _ := newJSONLogger("info")
 	gwCfg, err := config.LoadGatewayConfig(cmd)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		bootstrapLogger.Fatal("Failed to load config", zap.Error(err))
 	}
 
-	// Setup logger
-	var logger *zap.Logger
-	if strings.EqualFold(strings.TrimSpace(gwCfg.Server.LogLevel), "debug") {
-		logger, err = zap.NewDevelopment()
-	} else {
-		logger, err = zap.NewProduction()
-	}
+	// Setup logger. Always use JSON encoding so every level has one parseable format.
+	logger, err := newJSONLogger(gwCfg.Server.LogLevel)
 	if err != nil {
-		log.Fatalf("Failed to init logger: %v", err)
+		bootstrapLogger.Fatal("Failed to init logger", zap.Error(err))
 	}
 	defer func() { _ = logger.Sync() }()
 
@@ -72,21 +66,14 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		)
 	}
 
-	logger.Info("Starting AntiGateway",
-		zap.String("version", config.Version),
+	logger.Info("Starting Kiro Gateway",
+		zap.String("version", version.Get()),
 		zap.String("host", gwCfg.Server.Host),
 		zap.Int("port", gwCfg.Server.Port),
-		zap.Bool("tenant_auth", gwCfg.Tenant.Enabled),
 	)
 
-	// Initialize provider registry
-	fallback := gwCfg.Defaults.Provider
-	strategy := providers.LBStrategy(gwCfg.Defaults.LBStrategy)
-	if strategy == "" {
-		strategy = providers.LBWeightedRandom
-	}
-	registry := providers.NewRegistryWithStrategy(fallback, strategy)
-	logger.Info("Load balancing strategy", zap.String("strategy", string(strategy)))
+	// Initialize Kiro account registry.
+	registry := providers.NewRegistry()
 
 	// SQLite store — always created for provider & key management
 	dbPath := gwCfg.Tenant.DBPath
@@ -94,11 +81,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		dbPath = config.DefaultDBPath()
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		log.Fatalf("Failed to create db directory: %v", err)
+		logger.Fatal("Failed to create db directory", zap.Error(err))
 	}
 	store, err := tenant.NewStore(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to init store: %v", err)
+		logger.Fatal("Failed to init store", zap.Error(err))
 	}
 	defer func() { _ = store.Close() }()
 	logger.Info("Store initialized", zap.String("db", dbPath))
@@ -109,27 +96,27 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			logger.Info("Skipping disabled provider", zap.String("name", rec.Name))
 			continue
 		}
+		if rec.Type != "kiro" {
+			logger.Warn("Skipping unsupported account type",
+				zap.String("name", rec.Name),
+				zap.String("type", rec.Type))
+			continue
+		}
 		pc := config.ProviderConfig{
-			Name:         rec.Name,
-			Type:         rec.Type,
-			Weight:       rec.Weight,
-			Enabled:      rec.Enabled,
-			BaseURL:      rec.BaseURL,
-			APIKey:       rec.APIKey,
-			GithubToken:  rec.GithubToken,
-			Models:       rec.Models,
-			DefaultModel: rec.DefaultModel,
+			Name:    rec.Name,
+			Type:    rec.Type,
+			Region:  rec.Region,
+			Enabled: rec.Enabled,
 		}
 		p, err := createProvider(pc, logger)
 		if err != nil {
 			logger.Error("Failed to create provider", zap.String("name", rec.Name), zap.Error(err))
 			continue
 		}
-		registry.RegisterWithConfig(p, rec.Weight, rec.Models)
+		registry.Register(p)
 		logger.Info("Registered provider",
 			zap.String("name", rec.Name),
 			zap.String("type", rec.Type),
-			zap.Int("weight", rec.Weight),
 		)
 	}
 
@@ -156,16 +143,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Build router config
-	rateLimiter := tenant.NewRateLimiter()
 	routerCfg := routes.RouterConfig{
 		Registry:        registry,
 		Logger:          logger,
-		APIKey:          gwCfg.Auth.APIKey,
 		AdminKey:        gwCfg.Auth.AdminKey,
+		AdminLocalOnly:  gwCfg.Auth.AdminLocalOnly,
 		Store:           store,
-		TenantAuth:      gwCfg.Tenant.Enabled,
-		RateLimiter:     rateLimiter,
 		CORSOrigins:     gwCfg.Server.CORSOrigins,
 		ProviderFactory: createProvider,
 	}
@@ -221,7 +204,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Stop background goroutines
-	rateLimiter.Stop()
 	for _, p := range registry.All() {
 		if s, ok := p.(providers.Stoppable); ok {
 			s.Stop()
@@ -234,49 +216,26 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 // createProvider instantiates an AIProvider from config.
 func createProvider(pc config.ProviderConfig, logger *zap.Logger) (providers.AIProvider, error) {
-	switch pc.Type {
-	case "kiro":
-		p := kiro.NewProvider(pc.Name, logger)
-		return p, nil
-
-	case "openai", "openai-compat":
-		if pc.BaseURL == "" {
-			if pc.Type == "openai" {
-				pc.BaseURL = "https://api.openai.com/v1"
-			} else {
-				return nil, fmt.Errorf("base_url is required for openai-compat provider %q", pc.Name)
-			}
-		}
-		return openaiProvider.NewProvider(openaiProvider.Config{
-			Name:         pc.Name,
-			BaseURL:      pc.BaseURL,
-			APIKey:       pc.APIKey,
-			DefaultModel: pc.DefaultModel,
-			Logger:       logger,
-		}), nil
-
-	case "copilot":
-		return copilotProvider.NewProvider(copilotProvider.Config{
-			Name:        pc.Name,
-			GithubToken: pc.GithubToken,
-			Logger:      logger,
-		}), nil
-
-	case "anthropic":
-		if pc.APIKey == "" {
-			return nil, fmt.Errorf("api_key is required for anthropic provider %q", pc.Name)
-		}
-		return anthropicProvider.NewProvider(anthropicProvider.Config{
-			Name:         pc.Name,
-			BaseURL:      pc.BaseURL,
-			APIKey:       pc.APIKey,
-			DefaultModel: pc.DefaultModel,
-			Logger:       logger,
-		}), nil
-
-	default:
-		return nil, fmt.Errorf("unknown provider type: %q", pc.Type)
+	if pc.Type != "" && pc.Type != "kiro" {
+		return nil, fmt.Errorf("unsupported account type: %q", pc.Type)
 	}
+	name := pc.Name
+	if name == "" {
+		name = "kiro"
+	}
+	return kiro.NewProvider(name, logger, pc.Region), nil
+}
+
+func newJSONLogger(level string) (*zap.Logger, error) {
+	cfg := zap.NewProductionConfig()
+	parsedLevel := zapcore.InfoLevel
+	if strings.TrimSpace(level) != "" {
+		if err := parsedLevel.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(level)))); err != nil {
+			return nil, fmt.Errorf("invalid log level %q: %w", level, err)
+		}
+	}
+	cfg.Level = zap.NewAtomicLevelAt(parsedLevel)
+	return cfg.Build()
 }
 
 // generateRandomKey creates a secure random key.

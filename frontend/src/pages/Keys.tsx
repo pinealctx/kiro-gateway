@@ -5,7 +5,6 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
   Switch,
   Tag,
   Space,
@@ -16,6 +15,7 @@ import {
   Card,
   Alert,
   Tooltip,
+  Select,
 } from "antd";
 import {
   PlusOutlined,
@@ -32,7 +32,9 @@ import {
   createKey,
   updateKey,
   deleteKey,
+  listProviders,
   type ApiKey,
+  type ProviderRecord,
 } from "@/services/api";
 import UsageModal from "@/components/UsageModal";
 import { useT } from "@/locales";
@@ -50,11 +52,13 @@ function StatusBadge({ status, label }: { status: boolean; label: string }) {
 
 export default function KeysPage() {
   const [data, setData] = useState<ApiKey[]>([]);
+  const [accounts, setAccounts] = useState<ProviderRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ApiKey | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const [form] = Form.useForm();
+  const selectedKiroAccounts: string[] = Form.useWatch("kiro_accounts", form) ?? [];
   const { message } = App.useApp();
   const t = useT();
 
@@ -65,8 +69,9 @@ export default function KeysPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listKeys();
-      setData(res.keys);
+      const [keysRes, accountsRes] = await Promise.all([listKeys(), listProviders()]);
+      setData(keysRes.keys);
+      setAccounts(accountsRes.accounts);
     } catch {
       message.error(t.keys.loadError);
     } finally {
@@ -78,11 +83,23 @@ export default function KeysPage() {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    if (!modalOpen || newKeyValue) return;
+    const current = form.getFieldValue("kiro_default_account");
+    if (!selectedKiroAccounts.length) {
+      if (current) form.setFieldValue("kiro_default_account", undefined);
+      return;
+    }
+    if (!current || !selectedKiroAccounts.includes(current)) {
+      form.setFieldValue("kiro_default_account", selectedKiroAccounts[0]);
+    }
+  }, [form, modalOpen, newKeyValue, selectedKiroAccounts]);
+
   const openCreate = () => {
     setEditing(null);
     setNewKeyValue("");
     form.resetFields();
-    form.setFieldsValue({ enabled: true, qpm: 60, tpm: 100000 });
+    form.setFieldsValue({ enabled: true });
     setModalOpen(true);
   };
 
@@ -91,8 +108,8 @@ export default function KeysPage() {
     setNewKeyValue("");
     form.setFieldsValue({
       ...record,
-      allowed_models: record.allowed_models?.join(", ") ?? "",
-      allowed_providers: record.allowed_providers?.join(", ") ?? "",
+      kiro_accounts: record.kiro_accounts ?? [],
+      kiro_default_account: record.kiro_default_account ?? record.kiro_accounts?.[0],
     });
     setModalOpen(true);
   };
@@ -105,18 +122,11 @@ export default function KeysPage() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const parseList = (v: string | undefined) =>
-        v
-          ? String(v)
-              .split(",")
-              .map((s: string) => s.trim())
-              .filter(Boolean)
-          : undefined;
 
       const payload = {
         ...values,
-        allowed_models: parseList(values.allowed_models),
-        allowed_providers: parseList(values.allowed_providers),
+        kiro_accounts: values.kiro_accounts,
+        kiro_default_account: values.kiro_default_account ?? values.kiro_accounts?.[0],
       };
 
       if (editing) {
@@ -198,25 +208,22 @@ export default function KeysPage() {
       render: (v: boolean) => <StatusBadge status={v} label={v ? t.common.yes : t.common.no} />,
     },
     {
-      title: "QPM",
-      dataIndex: "qpm",
-      width: 80,
-      align: "center",
-      render: (v: number) => <Text code>{v}</Text>,
-    },
-    {
-      title: "TPM",
-      dataIndex: "tpm",
-      width: 80,
-      align: "center",
-      render: (v: number) => <Text code>{v?.toLocaleString()}</Text>,
-    },
-    {
-      title: t.keys.fieldDefaultProvider,
-      dataIndex: "default_provider",
+      title: t.keys.fieldKiroAccounts,
+      dataIndex: "kiro_accounts",
       ellipsis: true,
-      render: (v: string) =>
-        v ? <Tag>{v}</Tag> : <Text type="secondary">-</Text>,
+      render: (v: string[], record) =>
+        v?.length ? (
+          <div className="flex flex-wrap gap-1">
+            {v.map((account) => (
+              <Tag key={account} color={account === record.kiro_default_account ? "blue" : undefined}>
+                {account}
+                {account === record.kiro_default_account ? ` ${t.keys.defaultAccountTag}` : ""}
+              </Tag>
+            ))}
+          </div>
+        ) : (
+          <Text type="secondary">-</Text>
+        ),
     },
     {
       title: t.common.actions,
@@ -340,36 +347,26 @@ export default function KeysPage() {
                 <Switch />
               </Form.Item>
             )}
-            <Form.Item name="default_provider" label={t.keys.fieldDefaultProvider}>
-              <Input placeholder={t.keys.fieldDefaultProviderPlaceholder} />
+            <Form.Item
+              name="kiro_accounts"
+              label={t.keys.fieldKiroAccounts}
+              rules={[{ required: true, message: t.common.required }]}
+            >
+              <Select
+                mode="multiple"
+                placeholder={t.keys.fieldKiroAccountsPlaceholder}
+                options={accounts.map((account) => ({ label: account.name, value: account.name }))}
+              />
             </Form.Item>
             <Form.Item
-              name="allowed_models"
-              label={t.keys.fieldAllowedModels}
-              tooltip={t.keys.fieldAllowedModelsTooltip}
+              name="kiro_default_account"
+              label={t.keys.fieldKiroDefaultAccount}
+              rules={[{ required: true, message: t.common.required }]}
             >
-              <Input placeholder={t.keys.fieldAllowedModelsPlaceholder} />
-            </Form.Item>
-            <Form.Item
-              name="allowed_providers"
-              label={t.keys.fieldAllowedProviders}
-              tooltip={t.keys.fieldAllowedProvidersTooltip}
-            >
-              <Input placeholder={t.keys.fieldAllowedProvidersPlaceholder} />
-            </Form.Item>
-            <Form.Item
-              name="qpm"
-              label={t.keys.fieldQpm}
-              tooltip={t.keys.fieldQpmTooltip}
-            >
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item
-              name="tpm"
-              label={t.keys.fieldTpm}
-              tooltip={t.keys.fieldTpmTooltip}
-            >
-              <InputNumber min={0} className="w-full" />
+              <Select
+                placeholder={t.keys.fieldKiroDefaultAccountPlaceholder}
+                options={selectedKiroAccounts.map((account) => ({ label: account, value: account }))}
+              />
             </Form.Item>
           </Form>
         )}

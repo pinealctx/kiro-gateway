@@ -1,4 +1,4 @@
-import { getAdminKey, clearAdminKey } from "@/stores/auth";
+import { getAdminKey, clearAuthCache } from "@/stores/auth";
 
 const BASE = "";
 
@@ -32,14 +32,14 @@ async function request<T>(
   if (!resp.ok) {
     // Handle 401 Unauthorized - clear auth and redirect to login
     if (resp.status === 401) {
-      clearAdminKey();
+      clearAuthCache();
       window.location.href = "/ui/login";
       throw new ApiError(resp.status, "Unauthorized");
     }
     const data = await resp.json().catch(() => ({}));
     throw new ApiError(
       resp.status,
-      data?.error?.message ?? `Request failed (${resp.status})`,
+      (typeof data?.error === "string" ? data.error : data?.error?.message) ?? `Request failed (${resp.status})`,
     );
   }
 
@@ -50,36 +50,109 @@ async function request<T>(
 // --- Health ---
 export const getHealth = () => request<{ status: string; version: string }>("GET", "/health");
 
-// --- Providers ---
+// --- Kiro Accounts ---
 export interface ProviderRecord {
   id: string;
   name: string;
   type: string;
-  weight: number;
+  region: string;
   enabled: boolean;
-  base_url?: string;
-  api_key?: string;
-  github_token?: string;
-  models?: string[];
-  default_model?: string;
   healthy?: boolean;
   created_at?: string;
 }
 
+export interface KiroUsageLimits {
+  account?: string;
+  email?: string;
+  tier?: string;
+  raw_subscription?: string;
+  subscription_state?: string;
+  profile_arn?: string;
+  days_until_reset?: number;
+  next_date_reset?: number;
+  fetched_at: string;
+  usage: {
+    resource_type?: string;
+    display_name?: string;
+    used: number;
+    limit: number;
+    used_precise: number;
+    limit_precise: number;
+    remaining: number;
+    remaining_precise: number;
+    percent_used: number;
+    overage_rate: number;
+    overage_cap: number;
+    overages: number;
+    currency?: string;
+  };
+}
+
 export const listProviders = () =>
-  request<{ providers: ProviderRecord[]; total: number }>("GET", "/admin/providers");
+  request<{ accounts: ProviderRecord[]; total: number }>("GET", "/admin/accounts");
+
+export const verifyAdminKey = async (key: string) => {
+  const resp = await fetch(`${BASE}/admin/accounts`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${key}`,
+    },
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new ApiError(
+      resp.status,
+      (typeof data?.error === "string" ? data.error : data?.error?.message) ?? `Request failed (${resp.status})`,
+    );
+  }
+  return resp.json() as Promise<{ accounts: ProviderRecord[]; total: number }>;
+};
 
 export const getProvider = (id: string) =>
-  request<ProviderRecord>("GET", `/admin/providers/${id}`);
+  request<ProviderRecord>("GET", `/admin/accounts/${id}`);
 
 export const createProvider = (data: Partial<ProviderRecord>) =>
-  request<ProviderRecord>("POST", "/admin/providers", data);
+  request<ProviderRecord>("POST", "/admin/accounts", { ...data, type: "kiro" });
 
 export const updateProvider = (id: string, data: Partial<ProviderRecord>) =>
-  request<ProviderRecord>("PUT", `/admin/providers/${id}`, data);
+  request<ProviderRecord>("PUT", `/admin/accounts/${id}`, data);
 
 export const deleteProvider = (id: string) =>
-  request<{ deleted: boolean }>("DELETE", `/admin/providers/${id}`);
+  request<{ deleted: boolean }>("DELETE", `/admin/accounts/${id}`);
+
+export const getKiroUsageLimits = (provider?: string) => {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return request<KiroUsageLimits>("GET", `/admin/kiro/usage-limits${qs}`);
+};
+
+export interface KiroModelsResponse {
+  provider: string;
+  models: KiroModelInfo[];
+  total: number;
+}
+
+export interface KiroModelInfo {
+  model_id: string;
+  model_name?: string;
+  description?: string;
+  rate_multiplier: number;
+  rate_unit?: string;
+  supported_input_types?: string[];
+  token_limits?: {
+    max_input_tokens: number;
+    max_output_tokens: number;
+  };
+  prompt_caching?: {
+    supports_prompt_caching: boolean;
+  };
+  is_default: boolean;
+}
+
+export const getKiroModels = (provider?: string) => {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return request<KiroModelsResponse>("GET", `/admin/kiro/models${qs}`);
+};
 
 // --- API Keys ---
 export interface ApiKey {
@@ -88,11 +161,8 @@ export interface ApiKey {
   key_prefix?: string;
   name: string;
   enabled: boolean;
-  allowed_models?: string[];
-  allowed_providers?: string[];
-  default_provider?: string;
-  qpm?: number;
-  tpm?: number;
+  kiro_accounts?: string[];
+  kiro_default_account?: string;
   created_at?: string;
 }
 
@@ -142,49 +212,23 @@ export const getUsage = (params?: {
   return request<{ usage: UsageRecord[] }>("GET", `/admin/usage${q ? `?${q}` : ""}`);
 };
 
-// --- Copilot ---
-export interface DeviceFlowSession {
-  id: string;
-  user_code: string;
-  verification_uri: string;
-  expires_at: string;
-  interval: number;
-  status: string;
-}
-
-export interface CopilotStatus {
-  username?: string;
-  healthy: boolean;
-  has_token: boolean;
-  token_expires?: string;
-}
-
-export const startDeviceFlow = (provider?: string) => {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<DeviceFlowSession>("POST", `/admin/auth/device-code${qs}`);
-};
-
-export const pollDeviceFlow = (id: string, provider?: string) => {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<{ id: string; status: string; error?: string }>("GET", `/admin/auth/poll/${id}${qs}`);
-};
-
-export const completeDeviceFlow = (id: string, provider?: string) => {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<{ message: string; provider: string }>("POST", `/admin/auth/complete/${id}${qs}`);
-};
-
-export const getCopilotStatus = (provider?: string) => {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<CopilotStatus>("GET", `/admin/copilot/status${qs}`);
-};
-
 // --- Kiro ---
 export interface KiroLoginSession {
   id: string;
   auth_url: string;
   port: number;
   status: string;
+}
+
+export interface KiroDeviceLoginSession {
+  id: string;
+  user_code: string;
+  verification_uri?: string;
+  verification_uri_complete: string;
+  interval: number;
+  expires_at?: string;
+  status: string;
+  method?: string;
 }
 
 export interface KiroStatus {
@@ -197,6 +241,11 @@ export interface KiroStatus {
 export const startKiroLogin = (provider?: string, port?: number) => {
   const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
   return request<KiroLoginSession>("POST", `/admin/kiro/login${qs}`, port ? { port } : undefined);
+};
+
+export const startKiroDeviceLogin = (provider?: string, data?: { method?: string; idc_region?: string; start_url?: string }) => {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return request<KiroDeviceLoginSession>("POST", `/admin/kiro/device-login${qs}`, data);
 };
 
 export const getKiroLoginStatus = (id: string, provider?: string) => {

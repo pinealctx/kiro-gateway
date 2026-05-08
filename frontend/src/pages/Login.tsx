@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Card, Input, Button, Typography, App } from "antd";
 import { LockOutlined } from "@ant-design/icons";
 import { setAdminKey } from "@/stores/auth";
-import { listProviders } from "@/services/api";
+import { verifyAdminKey } from "@/services/api";
 import { useT } from "@/locales";
 
 interface Props {
@@ -45,13 +45,12 @@ export default function LoginPage({ onSuccess }: Props) {
     }
     setLoading(true);
     try {
-      setAdminKey(key.trim());
-      // Use an admin-authed endpoint to verify the key
-      await listProviders();
+      const trimmedKey = key.trim();
+      await verifyAdminKey(trimmedKey);
+      setAdminKey(trimmedKey);
       message.success(t.login.success);
       onSuccess();
     } catch {
-      setAdminKey("");
       message.error(t.login.error);
     } finally {
       setLoading(false);

@@ -62,11 +62,8 @@ func (s *Store) migrate() error {
 		key         TEXT UNIQUE NOT NULL,
 		name        TEXT NOT NULL DEFAULT '',
 		enabled     INTEGER NOT NULL DEFAULT 1,
-		allowed_models    TEXT NOT NULL DEFAULT '[]',
-		allowed_providers TEXT NOT NULL DEFAULT '[]',
-		default_provider  TEXT NOT NULL DEFAULT '',
-		qpm         INTEGER NOT NULL DEFAULT 0,
-		tpm         INTEGER NOT NULL DEFAULT 0,
+		kiro_accounts     TEXT NOT NULL DEFAULT '[]',
+		kiro_default_account TEXT NOT NULL DEFAULT '',
 		metadata    TEXT NOT NULL DEFAULT '{}',
 		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -92,13 +89,8 @@ func (s *Store) migrate() error {
 		id            TEXT PRIMARY KEY,
 		name          TEXT UNIQUE NOT NULL,
 		type          TEXT NOT NULL,
-		weight        INTEGER NOT NULL DEFAULT 1,
+		region        TEXT NOT NULL DEFAULT 'us-east-1',
 		enabled       INTEGER NOT NULL DEFAULT 1,
-		base_url      TEXT NOT NULL DEFAULT '',
-		api_key       TEXT NOT NULL DEFAULT '',
-		github_token  TEXT NOT NULL DEFAULT '',
-		models        TEXT NOT NULL DEFAULT '[]',
-		default_model TEXT NOT NULL DEFAULT '',
 		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -113,9 +105,12 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("migrate tenant db: %w", err)
 	}
-	// Safe column additions for existing databases
-	_, _ = s.db.Exec("ALTER TABLE api_keys ADD COLUMN default_provider TEXT NOT NULL DEFAULT ''")
-	_, _ = s.db.Exec("ALTER TABLE providers ADD COLUMN github_token TEXT NOT NULL DEFAULT ''")
+	if _, err := s.db.Exec("ALTER TABLE api_keys ADD COLUMN kiro_default_account TEXT NOT NULL DEFAULT ''"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate tenant db: %w", err)
+	}
+	if _, err := s.db.Exec("ALTER TABLE providers ADD COLUMN region TEXT NOT NULL DEFAULT 'us-east-1'"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate tenant db: %w", err)
+	}
 	return nil
 }
 
@@ -123,7 +118,7 @@ func (s *Store) loadCache() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query("SELECT id, key, name, enabled, allowed_models, allowed_providers, default_provider, qpm, tpm, metadata, created_at, updated_at FROM api_keys")
+	rows, err := s.db.Query("SELECT id, key, name, enabled, kiro_accounts, kiro_default_account, metadata, created_at, updated_at FROM api_keys")
 	if err != nil {
 		return err
 	}
@@ -142,26 +137,35 @@ func (s *Store) loadCache() error {
 
 func scanKey(rows *sql.Rows) (*APIKey, error) {
 	var k APIKey
-	var modelsJSON, providersJSON, metaJSON string
+	var accountsJSON, metaJSON string
 	var enabled int
-	err := rows.Scan(&k.ID, &k.Key, &k.Name, &enabled, &modelsJSON, &providersJSON, &k.DefaultProvider, &k.QPM, &k.TPM, &metaJSON, &k.CreatedAt, &k.UpdatedAt)
+	err := rows.Scan(&k.ID, &k.Key, &k.Name, &enabled, &accountsJSON, &k.KiroDefaultAccount, &metaJSON, &k.CreatedAt, &k.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	k.Enabled = enabled == 1
-	_ = json.Unmarshal([]byte(modelsJSON), &k.AllowedModels)
-	_ = json.Unmarshal([]byte(providersJSON), &k.AllowedProviders)
+	_ = json.Unmarshal([]byte(accountsJSON), &k.KiroAccounts)
 	_ = json.Unmarshal([]byte(metaJSON), &k.Metadata)
-	if k.AllowedModels == nil {
-		k.AllowedModels = []string{}
+	if k.KiroAccounts == nil {
+		k.KiroAccounts = []string{}
 	}
-	if k.AllowedProviders == nil {
-		k.AllowedProviders = []string{}
+	if k.KiroDefaultAccount == "" && len(k.KiroAccounts) > 0 {
+		k.KiroDefaultAccount = k.KiroAccounts[0]
 	}
 	if k.Metadata == nil {
 		k.Metadata = make(map[string]string)
 	}
 	return &k, nil
+}
+
+func cloneAPIKey(k *APIKey) *APIKey {
+	clone := *k
+	clone.KiroAccounts = append([]string(nil), k.KiroAccounts...)
+	clone.Metadata = make(map[string]string, len(k.Metadata))
+	for key, value := range k.Metadata {
+		clone.Metadata[key] = value
+	}
+	return &clone
 }
 
 // Close closes the database connection.
@@ -176,30 +180,35 @@ func (s *Store) Close() error {
 // CreateKey creates a new API key and returns it.
 func (s *Store) CreateKey(name string, opts ...KeyOption) (*APIKey, error) {
 	k := &APIKey{
-		ID:               generateID(),
-		Key:              generateAPIKey(),
-		Name:             name,
-		Enabled:          true,
-		AllowedModels:    []string{},
-		AllowedProviders: []string{},
-		Metadata:         make(map[string]string),
-		CreatedAt:        time.Now().UTC(),
-		UpdatedAt:        time.Now().UTC(),
+		ID:        generateID(),
+		Key:       generateAPIKey(),
+		Name:      name,
+		Enabled:   true,
+		Metadata:  make(map[string]string),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
 	}
 	for _, opt := range opts {
 		opt(k)
 	}
+	if len(k.KiroAccounts) == 0 {
+		return nil, fmt.Errorf("create key: kiro_accounts is required")
+	}
+	if k.KiroDefaultAccount == "" {
+		k.KiroDefaultAccount = k.KiroAccounts[0]
+	}
+	if !containsString(k.KiroAccounts, k.KiroDefaultAccount) {
+		return nil, fmt.Errorf("create key: kiro_default_account must be in kiro_accounts")
+	}
 
-	modelsJSON, _ := json.Marshal(k.AllowedModels)
-	providersJSON, _ := json.Marshal(k.AllowedProviders)
+	accountsJSON, _ := json.Marshal(k.KiroAccounts)
 	metaJSON, _ := json.Marshal(k.Metadata)
 
 	_, err := s.db.Exec(
-		`INSERT INTO api_keys (id, key, name, enabled, allowed_models, allowed_providers, default_provider, qpm, tpm, metadata, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO api_keys (id, key, name, enabled, kiro_accounts, kiro_default_account, metadata, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		k.ID, k.Key, k.Name, boolToInt(k.Enabled),
-		string(modelsJSON), string(providersJSON), k.DefaultProvider,
-		k.QPM, k.TPM, string(metaJSON),
+		string(accountsJSON), k.KiroDefaultAccount, string(metaJSON),
 		k.CreatedAt, k.UpdatedAt,
 	)
 	if err != nil {
@@ -262,32 +271,40 @@ func (s *Store) UpdateKey(id string, opts ...KeyOption) (*APIKey, error) {
 	}
 
 	oldToken := target.Key
+	updated := cloneAPIKey(target)
 	for _, opt := range opts {
-		opt(target)
+		opt(updated)
 	}
-	target.UpdatedAt = time.Now().UTC()
+	if len(updated.KiroAccounts) == 0 {
+		return nil, fmt.Errorf("update key: kiro_accounts is required")
+	}
+	if updated.KiroDefaultAccount == "" {
+		updated.KiroDefaultAccount = updated.KiroAccounts[0]
+	}
+	if !containsString(updated.KiroAccounts, updated.KiroDefaultAccount) {
+		return nil, fmt.Errorf("update key: kiro_default_account must be in kiro_accounts")
+	}
+	updated.UpdatedAt = time.Now().UTC()
 
-	modelsJSON, _ := json.Marshal(target.AllowedModels)
-	providersJSON, _ := json.Marshal(target.AllowedProviders)
-	metaJSON, _ := json.Marshal(target.Metadata)
+	accountsJSON, _ := json.Marshal(updated.KiroAccounts)
+	metaJSON, _ := json.Marshal(updated.Metadata)
 
 	_, err := s.db.Exec(
-		`UPDATE api_keys SET name=?, enabled=?, allowed_models=?, allowed_providers=?, default_provider=?, qpm=?, tpm=?, metadata=?, updated_at=? WHERE id=?`,
-		target.Name, boolToInt(target.Enabled),
-		string(modelsJSON), string(providersJSON), target.DefaultProvider,
-		target.QPM, target.TPM, string(metaJSON),
-		target.UpdatedAt, target.ID,
+		`UPDATE api_keys SET name=?, enabled=?, kiro_accounts=?, kiro_default_account=?, metadata=?, updated_at=? WHERE id=?`,
+		updated.Name, boolToInt(updated.Enabled),
+		string(accountsJSON), updated.KiroDefaultAccount, string(metaJSON),
+		updated.UpdatedAt, updated.ID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update key: %w", err)
 	}
 
 	// Update cache (key token doesn't change, but re-index just in case)
-	if oldToken != target.Key {
+	if oldToken != updated.Key {
 		delete(s.cache, oldToken)
 	}
-	s.cache[target.Key] = target
-	return target, nil
+	s.cache[updated.Key] = updated
+	return updated, nil
 }
 
 // DeleteKey removes an API key.
@@ -401,44 +418,12 @@ func (s *Store) QueryUsage(q UsageQuery) ([]UsageSummary, error) {
 	return results, rows.Err()
 }
 
-// CountRecentRequests counts requests in the last minute for a key (for QPM check).
-func (s *Store) CountRecentRequests(keyID string, window time.Duration) (int, error) {
-	since := time.Now().UTC().Add(-window)
-	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM usage_records WHERE key_id=? AND created_at>=?", keyID, since).Scan(&count)
-	return count, err
-}
-
-// CountRecentTokens sums tokens in the last minute for a key (for TPM check).
-func (s *Store) CountRecentTokens(keyID string, window time.Duration) (int, error) {
-	since := time.Now().UTC().Add(-window)
-	var total int
-	err := s.db.QueryRow("SELECT COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE key_id=? AND created_at>=?", keyID, since).Scan(&total)
-	return total, err
-}
-
 // ============================================================
 // Key options (functional options pattern)
 // ============================================================
 
 // KeyOption is a functional option for configuring an API key.
 type KeyOption func(*APIKey)
-
-func WithModels(models []string) KeyOption {
-	return func(k *APIKey) { k.AllowedModels = models }
-}
-
-func WithProviders(providers []string) KeyOption {
-	return func(k *APIKey) { k.AllowedProviders = providers }
-}
-
-func WithQPM(qpm int) KeyOption {
-	return func(k *APIKey) { k.QPM = qpm }
-}
-
-func WithTPM(tpm int) KeyOption {
-	return func(k *APIKey) { k.TPM = tpm }
-}
 
 func WithEnabled(enabled bool) KeyOption {
 	return func(k *APIKey) { k.Enabled = enabled }
@@ -448,8 +433,35 @@ func WithName(name string) KeyOption {
 	return func(k *APIKey) { k.Name = name }
 }
 
-func WithDefaultProvider(provider string) KeyOption {
-	return func(k *APIKey) { k.DefaultProvider = provider }
+func WithKiroAccounts(accounts []string) KeyOption {
+	return func(k *APIKey) { k.KiroAccounts = normalizeStringList(accounts) }
+}
+
+func WithKiroDefaultAccount(account string) KeyOption {
+	return func(k *APIKey) { k.KiroDefaultAccount = strings.TrimSpace(account) }
+}
+
+func normalizeStringList(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		result = append(result, v)
+	}
+	return result
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================
@@ -460,7 +472,7 @@ func (s *Store) loadProviderCache() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query("SELECT id, name, type, weight, enabled, base_url, api_key, github_token, models, default_model, created_at, updated_at FROM providers")
+	rows, err := s.db.Query("SELECT id, name, type, region, enabled, created_at, updated_at FROM providers")
 	if err != nil {
 		return err
 	}
@@ -480,18 +492,17 @@ func (s *Store) loadProviderCache() error {
 func scanProvider(rows *sql.Rows) (*ProviderRecord, error) {
 	var p ProviderRecord
 	var enabled int
-	var modelsJSON string
-	err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.Weight, &enabled,
-		&p.BaseURL, &p.APIKey, &p.GithubToken, &modelsJSON, &p.DefaultModel,
-		&p.CreatedAt, &p.UpdatedAt)
+	err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.Region, &enabled, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	p.Enabled = enabled == 1
-	_ = json.Unmarshal([]byte(modelsJSON), &p.Models)
-	if p.Models == nil {
-		p.Models = []string{}
+	if p.Type == "" {
+		p.Type = "kiro"
 	}
+	if p.Region == "" {
+		p.Region = "us-east-1"
+	}
+	p.Enabled = enabled == 1
 	return &p, nil
 }
 
@@ -501,9 +512,8 @@ func (s *Store) CreateProvider(name, typ string, opts ...ProviderOption) (*Provi
 		ID:        generateID(),
 		Name:      name,
 		Type:      typ,
-		Weight:    1,
+		Region:    "us-east-1",
 		Enabled:   true,
-		Models:    []string{},
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
@@ -511,13 +521,10 @@ func (s *Store) CreateProvider(name, typ string, opts ...ProviderOption) (*Provi
 		opt(p)
 	}
 
-	modelsJSON, _ := json.Marshal(p.Models)
-
 	_, err := s.db.Exec(
-		`INSERT INTO providers (id, name, type, weight, enabled, base_url, api_key, github_token, models, default_model, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.Type, p.Weight, boolToInt(p.Enabled),
-		p.BaseURL, p.APIKey, p.GithubToken, string(modelsJSON), p.DefaultModel,
+		`INSERT INTO providers (id, name, type, region, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Type, p.Region, boolToInt(p.Enabled),
 		p.CreatedAt, p.UpdatedAt,
 	)
 	if err != nil {
@@ -579,12 +586,9 @@ func (s *Store) UpdateProvider(id string, opts ...ProviderOption) (*ProviderReco
 	}
 	target.UpdatedAt = time.Now().UTC()
 
-	modelsJSON, _ := json.Marshal(target.Models)
-
 	_, err := s.db.Exec(
-		`UPDATE providers SET name=?, type=?, weight=?, enabled=?, base_url=?, api_key=?, github_token=?, models=?, default_model=?, updated_at=? WHERE id=?`,
-		target.Name, target.Type, target.Weight, boolToInt(target.Enabled),
-		target.BaseURL, target.APIKey, target.GithubToken, string(modelsJSON), target.DefaultModel,
+		`UPDATE providers SET name=?, type=?, region=?, enabled=?, updated_at=? WHERE id=?`,
+		target.Name, target.Type, target.Region, boolToInt(target.Enabled),
 		target.UpdatedAt, target.ID,
 	)
 	if err != nil {

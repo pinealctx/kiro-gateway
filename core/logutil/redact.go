@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	jsonSecretPattern = regexp.MustCompile(`(?i)"(api_key|github_token|access_token|refresh_token|client_secret|authorization|password|token)"\s*:\s*"([^"]*)"`)
-	formSecretPattern = regexp.MustCompile(`(?i)(api_key|github_token|access_token|refresh_token|client_secret|authorization|password|token)=([^&\s]+)`)
+	jsonSecretPattern = regexp.MustCompile(`(?i)"(api_key|apiKey|access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|authorization|password|token|deviceCode|code_verifier|codeVerifier)"\s*:\s*"([^"]*)"`)
+	formSecretPattern = regexp.MustCompile(`(?i)(api_key|apiKey|access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|authorization|password|token|deviceCode|code|code_verifier|codeVerifier)=([^&\s]+)`)
 )
 
 // RedactString masks common secret fields in JSON/form-like text.

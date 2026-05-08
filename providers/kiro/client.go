@@ -9,15 +9,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pinealctx/anti-gateway/core/eventstream"
-	"github.com/pinealctx/anti-gateway/core/logutil"
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/core/eventstream"
+	"github.com/pinealctx/kiro-gateway/core/logutil"
+	"github.com/pinealctx/kiro-gateway/models"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const (
-	cwEndpoint  = "https://q.us-east-1.amazonaws.com/generateAssistantResponse"
 	cwTarget    = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 	cwUserAgent = "kiro-cli-chat-macos-aarch64-1.27.2"
 
@@ -32,9 +31,10 @@ var retryBackoff = []time.Duration{1 * time.Second, 3 * time.Second, 10 * time.S
 type CWClient struct {
 	client *http.Client
 	logger *zap.Logger
+	region string
 }
 
-func NewCWClient(logger *zap.Logger) *CWClient {
+func NewCWClient(logger *zap.Logger, region string) *CWClient {
 	return &CWClient{
 		client: &http.Client{
 			// Long read timeout for Claude Code sessions that can produce very long outputs.
@@ -42,6 +42,7 @@ func NewCWClient(logger *zap.Logger) *CWClient {
 			Timeout: 2 * time.Hour,
 		},
 		logger: logger,
+		region: normalizeRegion(region),
 	}
 }
 
@@ -69,18 +70,6 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 	}
 
 	debugEnabled := c.logger.Core().Enabled(zapcore.DebugLevel)
-	if debugEnabled {
-		reqBody, reqTruncated := logutil.TruncateString(logutil.RedactString(string(bodyBytes)), maxLogBody)
-		reqBody = logutil.WithTruncationSuffix(reqBody, reqTruncated, len(bodyBytes), maxLogBody)
-		c.logger.Debug("kiro upstream request",
-			zap.String("url", cwEndpoint),
-			zap.String("method", "POST"),
-			zap.String("content_type", "application/x-amz-json-1.0"),
-			zap.String("target", cwTarget),
-			zap.String("token_type", map[bool]string{true: "EXTERNAL_IDP", false: "STANDARD"}[token.IsExternalIdP]),
-			zap.String("request_body", reqBody),
-		)
-	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -98,7 +87,7 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", cwEndpoint, bytes.NewReader(bodyBytes))
+		req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint("generateAssistantResponse"), bytes.NewReader(bodyBytes))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
 		}
@@ -110,6 +99,7 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 		if token.IsExternalIdP {
 			req.Header.Set("TokenType", "EXTERNAL_IDP")
 		}
+		debugKiroHTTPRequest(c.logger, "kiro upstream request", req, bodyBytes)
 
 		resp, err := c.client.Do(req)
 		if err != nil {
@@ -166,6 +156,10 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 	}
 
 	return nil, fmt.Errorf("cw request failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func (c *CWClient) endpoint(path string) string {
+	return fmt.Sprintf("https://q.%s.amazonaws.com/%s", normalizeRegion(c.region), path)
 }
 
 func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {

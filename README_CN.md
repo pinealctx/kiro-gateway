@@ -1,232 +1,133 @@
-# AntiGateway
+# Kiro Gateway
 
-[English](README.md) | [简体中文](README_CN.md)
+Kiro Gateway 将 Kiro / CodeWhisperer 后端封装为 OpenAI 与 Anthropic 兼容接口，并支持多个账号与多个 API Key 的绑定路由。
 
-统一的 AI 网关，提供标准化接口接入多个 LLM 提供方。AntiGateway 支持 OpenAI 与 Anthropic 两种 API 格式，并可按规则路由到不同上游，包含协议转换、负载均衡与多租户能力。
+模块路径：`github.com/pinealctx/kiro-gateway`。二进制名称：`kiro-gateway`。
 
 ## 重要声明
 
-本项目中的 Kiro 与 GitHub Copilot 支持为非官方支持，仅用于个人测试与研究。
-受上游策略或协议变化影响，相关能力可能随时失效。
-如果相关实现影响到任何权利或利益，请联系维护者（或提交 issue），可及时移除相关代码。
+本项目中的 Kiro 支持为非官方支持，仅用于个人测试与研究。受上游策略或协议变化影响，相关能力可能随时失效。
 
 ## 核心功能
 
-- **多提供方接入**：Kiro（AWS Claude）、OpenAI、GitHub Copilot、Anthropic
-- **协议转换**：OpenAI、Anthropic、CodeWhisperer 格式互转
-- **负载均衡**：weighted、round-robin、least-used、priority、smart 五种策略
-- **多租户管理**：按 Key 鉴权、QPM/TPM 限流、用量统计
-- **自动续写**：自动续写被截断的 LLM 响应
-- **输出清洗**：移除 IDE 特定产物，执行身份替换
-- **流式响应**：完整 SSE 流式支持
-- **Web 管理后台**：React 管理面板，管理密钥、提供方、监控使用情况
-- **Prometheus 指标**：请求、延迟、Token、错误监控
+- **多账号**：每个账号独立登录、刷新和持久化 token。
+- **API Key 账号列表**：每个 API Key 必须绑定一个或多个允许使用的账号。
+- **协议兼容**：支持 OpenAI `/v1/chat/completions` 与 Anthropic `/v1/messages`，也支持账号 URL。
+- **Kiro 协议转换**：OpenAI / Anthropic 请求转换为 CodeWhisperer 私有协议。
+- **Tool Use 支持**：过滤 IDE 内置工具，并尽量重映射到客户端真实工具。
+- **Thinking 支持**：支持 `thinking` / `reasoning_effort`，流式输出 `reasoning_content`。
+- **自动续写**：自动续写被截断的响应。
+- **输出清洗**：移除 IDE 注入身份、XML 工具标签和 Kiro/CodeWhisperer 泄漏。
+- **Web 管理后台**：管理账号、API Key、登录授权和用量查看。
 
 ## 快速开始
 
 ### 依赖
 
-- Go 1.23+
+- Go 1.25+
 - Node.js 20+（前端开发）
 
 ### 构建运行
 
 ```bash
-git clone https://github.com/pinealctx/anti-gateway.git
-cd anti-gateway
-
-# 构建
-go build -o antigateway .
-
-# 配置
+go build -o kiro-gateway .
 cp config.example.yaml config.yaml
-# 编辑 config.yaml
-
-# 运行
-./antigateway
+./kiro-gateway --config config.yaml
 ```
 
-### Docker
+启动后打开 `/ui`，使用启动日志中的 Admin Key 登录后台。
 
-```bash
-docker build -t antigateway .
-docker run -p 8080:8080 -v $(pwd)/config.yaml:/app/config.yaml antigateway
-```
-
-## 配置说明
+## 配置示例
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 8080
   log_level: "info"
-  cors_origins: []       # 空 = 允许所有
 
 auth:
-  api_key: ""            # API 认证令牌（空 = 禁用）
-  admin_key: ""          # /admin/* 端点专用密钥
-
-defaults:
-  provider: ""           # 默认提供方
-  model: "claude-sonnet-4-20250514"
-  lb_strategy: "smart"   # weighted | round-robin | least-used | priority | smart
+  admin_key: ""           # 留空则启动时生成
+  admin_local_only: true  # 默认只允许本机访问 /admin/*
 
 tenant:
-  enabled: false         # 启用多租户模式
-  db_path: "antigateway.db"
+  db_path: "kiro-gateway.db"
 ```
 
-## API 端点
+使用 `--config` 或 `KIRO_GATEWAY_CONFIG` 指定配置文件。提供配置文件时，显式传入的 CLI 参数会覆盖文件值；未提供配置文件时，优先级为 CLI 参数、环境变量、默认值。
 
-### 聊天补全
+## 账号与 API Key
 
-**OpenAI 格式**
+1. 在后台 `账号` 页面创建账号，例如 `kiro-main`、`kiro-work`。
+2. 对每个账号执行 Kiro PKCE 登录，或导入本地 `kiro-cli` token。
+3. 在 `API Keys` 页面创建 API Key，选择允许使用的账号，并设置默认账号。UI 会默认把第一个选中的账号作为默认账号。
+4. 普通 `/v1/...` 路径使用该 Key 的默认账号；需要切换账号时，通过 URL 中的 `/a/{kiro_account}` 指定。
+
+URL 指定的账号必须在该 API Key 的允许列表中。Claude Code 配 `http://localhost:8080` 会使用 Key 默认账号；配 `http://localhost:8080/a/kiro-work` 会强制使用 `kiro-work`。
+
+账号名限制为 1-64 位：字母、数字、`.`、`_`、`-`，且首位必须是字母或数字。
+Kiro Gateway 不再把模型绑定到账号或 API Key；请求里的 `model` 由客户端自行传入。
+`/v1/models` 与 `/a/{kiro_account}/v1/models` 会先解析账号，再调用 Kiro 的 `ListAvailableModels` 查询该账号真实可用模型。
+Claude Code 只会把 ID 以 `claude` 或 `anthropic` 开头的 gateway models 加入 `/model` 选择器，因此 Kiro Gateway 会用 `anthropic.` 前缀暴露真实 Kiro 模型（例如 `anthropic.deepseek-3.2`），请求上游前再去掉该前缀。Claude Code 侧需要启用 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
+
+## API 示例
+
+### OpenAI 兼容
+
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
+curl -X POST http://localhost:8080/a/kiro-work/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4.6",
     "messages": [{"role": "user", "content": "你好"}],
     "stream": true
   }'
 ```
 
-**Anthropic 格式**
+### Anthropic 兼容
+
 ```bash
-curl -X POST http://localhost:8080/v1/messages \
+curl -X POST http://localhost:8080/a/kiro-work/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: YOUR_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4.6",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "你好"}]
   }'
 ```
 
-### 模型路由
+## 管理端点
 
-使用前缀路由到指定提供方：
-- `openai/gpt-4o` → OpenAI 提供方
-- `anthropic/claude-3-opus` → Anthropic 提供方
-- `kiro/claude-sonnet-4-20250514` → Kiro 提供方
-
-### 模型处理策略
-
-- 请求侧采用**最小规范化 + 透传**：
-  - `model` 为空时回落到提供方默认模型。
-  - 必要时会去掉 `claude-*-YYYYMMDD` 的日期后缀。
-  - 其他模型名原样透传（不再维护大规模别名映射表）。
-- `/v1/models` 返回面向外部维护的 Kiro/Copilot 支持目录：
-  - 包含静态维护的模型列表。
-  - 合并已配置 Copilot 提供方动态拉取到的模型。
-  - 同时返回原始模型 ID 与带提供方前缀的 ID（如 `kiro/...`、`copilot/...`），便于路由。
-
-### 其他端点
+业务 API 可以监听在公网地址；`/admin/*` 默认通过 `auth.admin_local_only` 限制为本机访问。
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/v1/models` | GET | 列出可用模型 |
-| `/v1/embeddings` | POST | 生成向量（OpenAI 格式） |
-| `/health` | GET | 健康检查 |
-| `/metrics` | GET | Prometheus 指标 |
-| `/ui` | GET | Web 管理界面 |
+| `/admin/accounts` | GET/POST | 列出或创建账号 |
+| `/admin/accounts/:id` | GET/PUT/DELETE | 管理账号 |
+| `/admin/keys` | GET/POST | 列出或创建 API Key |
+| `/admin/keys/:id` | GET/PUT/DELETE | 管理 API Key |
+| `/v1/chat/completions` | POST | 使用 Key 默认账号的 OpenAI 兼容聊天接口 |
+| `/v1/models` | GET | 查询 Key 默认账号可用模型 |
+| `/v1/messages` | POST | 使用 Key 默认账号的 Anthropic 兼容消息接口 |
+| `/a/:kiro_account/v1/chat/completions` | POST | OpenAI 兼容聊天接口 |
+| `/a/:kiro_account/v1/models` | GET | 查询指定账号可用模型 |
+| `/a/:kiro_account/v1/messages` | POST | Anthropic 兼容消息接口 |
+| `/admin/kiro/login` | POST | 启动 Kiro PKCE 登录 |
+| `/admin/kiro/device-login` | POST | 启动 Kiro 设备码登录 |
+| `/admin/kiro/import-local` | POST | 导入本地 kiro-cli token |
+| `/admin/usage` | GET | 查看用量统计 |
 
 ## 开发
 
-### 构建
-
 ```bash
-make fmt        # 格式化
-make lint       # 代码检查
-make build      # 构建
-make test       # 测试
-make check      # 全部检查
-```
+go test ./...
+go build ./...
 
-版本注入：
-
-```bash
-go build -ldflags "-X github.com/pinealctx/anti-gateway/config.Version=v0.3.0" -o antigateway .
-```
-
-### 前端开发
-
-```bash
 cd frontend
-npm install
-npm run dev    # 开发服务器
-npm run build  # 生产构建（输出到 web/static）
+pnpm install
+pnpm run build
 ```
 
-### Pre-commit Hooks
-
-```bash
-make setup-hooks
-```
-
-## 负载均衡策略
-
-| 策略 | 说明 |
-|------|------|
-| `weighted` | 按权重随机选择 |
-| `round-robin` | 轮询 |
-| `least-used` | 选择请求量最少的提供方 |
-| `priority` | 始终选择权重最高的提供方 |
-| `smart` | 综合权重、429 错误率、平均延迟评分选择 |
-
-## 架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Clients                               │
-│              (OpenAI SDK / Anthropic SDK / curl)            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     AntiGateway                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Auth      │  │  Rate       │  │    Protocol         │  │
-│  │ Middleware  │──│  Limiter    │──│    Converter        │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│                          │                                   │
-│                          ▼                                   │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              Provider Registry                       │    │
-│  │         (Load Balancing + Health Checks)            │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┬───────────────┐
-          ▼               ▼               ▼               ▼
-     ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-     │  Kiro   │    │ OpenAI  │    │ Copilot │    │Anthropic│
-     └─────────┘    └─────────┘    └─────────┘    └─────────┘
-```
-
-## 指标
-
-`/metrics` 端点提供 Prometheus 指标：
-
-- `antigateway_requests_total` - 按提供方、模型、状态的请求总数
-- `antigateway_request_duration_seconds` - 请求延迟直方图
-- `antigateway_tokens_total` - 按提供方、模型、类型的 Token 使用量
-- `antigateway_provider_health` - 提供方健康状态
-- `antigateway_rate_limit_hits_total` - 限流触发次数
-
-## 致谢
-
-感谢以下相关项目：
-
-- [AntiHub-ALL](https://github.com/zhongruan0522/AntiHub-ALL) - Kiro 提供方实现参考
-- [copilot2api-go](https://github.com/StarryKira/copilot2api-go) - GitHub Copilot 提供方实现参考
-
-## 协议
-
-本项目基于 MIT 协议开源，详见 [LICENSE](LICENSE)。
-
-## 贡献
-
-欢迎贡献！请提交 issue 或 pull request。
+前端生产构建会输出到 `web/static`，由 Go 二进制嵌入并通过 `/ui` 提供。

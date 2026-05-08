@@ -7,7 +7,7 @@ type Translations = typeof en;
 
 const translations: Record<Lang, Translations> = { en, zh };
 
-const LANG_KEY = "antigateway-lang";
+const LANG_KEY = "kiro-gateway-lang";
 
 function getInitialLang(): Lang {
   if (typeof window !== "undefined") {

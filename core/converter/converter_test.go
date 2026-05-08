@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
 // ============================================================
@@ -17,8 +17,13 @@ func TestResolveModel_ExactMatch(t *testing.T) {
 		input string
 		want  string
 	}{
+		{"claude-opus-4.7", "claude-opus-4.7"},
+		{"claude-opus-4-7", "claude-opus-4.7"},
+		{"claude-opus-4.7-1m", "claude-opus-4.7"},
+		{"claude-opus-4-7-1m", "claude-opus-4.7"},
 		{"claude-opus-4.6", "claude-opus-4.6"},
-		{"claude-opus-4-6", "claude-opus-4-6"},
+		{"claude-opus-4-6", "claude-opus-4.6"},
+		{"claude-opus-4.6-1m", "claude-opus-4.6"},
 		{"claude-sonnet-4.6", "claude-sonnet-4.6"},
 		{"claude-opus-4.5", "claude-opus-4.5"},
 		{"claude-sonnet-4-5", "claude-sonnet-4-5"},
@@ -56,8 +61,8 @@ func TestResolveModel_UnknownPassthrough(t *testing.T) {
 }
 
 func TestResolveModel_EmptyFallsToDefault(t *testing.T) {
-	if got := ResolveModel(""); got != DefaultModel {
-		t.Errorf("ResolveModel(\"\") = %q, want %q", got, DefaultModel)
+	if got := ResolveModel(""); got != "" {
+		t.Errorf("ResolveModel(\"\") = %q, want empty passthrough", got)
 	}
 }
 
@@ -114,6 +119,30 @@ func TestOpenAIToCW_SystemExtracted(t *testing.T) {
 	}
 	if !strings.Contains(firstEntry.UserInputMessage.Content, "Claude") {
 		t.Error("anti-injection prompt should mention Claude")
+	}
+}
+
+func TestOpenAIToCW_DeveloperExtractedAndThinkingHint(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-opus-4.6",
+		Messages: []models.ChatMessage{
+			{Role: "developer", Content: models.RawString("Prefer terse answers.")},
+			{Role: "user", Content: models.RawString("Write Go")},
+		},
+		Extras: map[string]json.RawMessage{
+			"thinking": json.RawMessage(`{"type":"enabled","budget_tokens":1234}`),
+		},
+	}
+	cw, err := OpenAIToCW(req, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content := cw.ConversationState.History[0].UserInputMessage.Content
+	if !strings.Contains(content, "Prefer terse answers.") {
+		t.Error("developer prompt not included in system injection")
+	}
+	if !strings.Contains(content, "<thinking_mode>enabled</thinking_mode>") {
+		t.Error("thinking hint not injected")
 	}
 }
 
@@ -181,6 +210,25 @@ func TestOpenAIToCW_ToolResultTruncated(t *testing.T) {
 	resultText := ctx.ToolResults[0].Content[0].Text
 	if len(resultText) > 50000 {
 		t.Errorf("tool result should be truncated to 50000, got %d", len(resultText))
+	}
+}
+
+func TestOpenAIToCW_ToolResultArrayContent(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-opus-4.6",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: models.RawString("call tool")},
+			{Role: "assistant", Content: models.RawString(""), ToolCalls: []models.ToolCall{{ID: "tc1", Type: "function", Function: models.ToolCallFunction{Name: "Read", Arguments: "{}"}}}},
+			{Role: "tool", Content: json.RawMessage(`[{"type":"text","text":"part one"},{"type":"text","text":"part two"}]`), ToolCallID: "tc1"},
+		},
+	}
+	cw, err := OpenAIToCW(req, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := cw.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.ToolResults[0].Content[0].Text
+	if got != "part one\npart two" {
+		t.Errorf("tool result text = %q", got)
 	}
 }
 

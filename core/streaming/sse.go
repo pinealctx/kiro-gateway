@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
 // OpenAISSEWriter writes OpenAI-compatible SSE chunks to a Gin response.
@@ -35,6 +35,22 @@ func (w *OpenAISSEWriter) WriteContentDelta(content string) error {
 			{
 				Index: 0,
 				Delta: models.ChatCompletionDelta{Content: content},
+			},
+		},
+	}
+	return w.writeEvent(chunk)
+}
+
+func (w *OpenAISSEWriter) WriteReasoningDelta(content string) error {
+	chunk := models.ChatCompletionChunk{
+		ID:      w.id,
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   w.model,
+		Choices: []models.ChatCompletionChunkChoice{
+			{
+				Index: 0,
+				Delta: models.ChatCompletionDelta{ReasoningContent: content},
 			},
 		},
 	}
@@ -153,6 +169,17 @@ func (w *AnthropicSSEWriter) WriteContentBlockStart() error {
 	return err
 }
 
+func (w *AnthropicSSEWriter) WriteThinkingBlockStart() error {
+	return w.writeTypedEvent("content_block_start", map[string]any{
+		"type":  "content_block_start",
+		"index": w.blockIndex,
+		"content_block": map[string]any{
+			"type":     "thinking",
+			"thinking": "",
+		},
+	})
+}
+
 func (w *AnthropicSSEWriter) WriteContentDelta(text string) error {
 	return w.writeTypedEvent("content_block_delta", map[string]any{
 		"type":  "content_block_delta",
@@ -160,6 +187,17 @@ func (w *AnthropicSSEWriter) WriteContentDelta(text string) error {
 		"delta": map[string]any{
 			"type": "text_delta",
 			"text": text,
+		},
+	})
+}
+
+func (w *AnthropicSSEWriter) WriteThinkingDelta(text string) error {
+	return w.writeTypedEvent("content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": w.blockIndex,
+		"delta": map[string]any{
+			"type":     "thinking_delta",
+			"thinking": text,
 		},
 	})
 }

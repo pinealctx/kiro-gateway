@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -195,23 +196,31 @@ func (tm *TokenManager) refreshAWSIdC(lt *LoginToken) (*TokenInfo, error) {
 			time.Sleep(retryBackoff[attempt-1])
 		}
 
-		req, _ := http.NewRequest("POST", lt.TokenEndpoint, bytes.NewReader(reqBody))
+		req, err := http.NewRequest("POST", lt.TokenEndpoint, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("create AWS IdC token refresh request: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
+		debugKiroHTTPRequest(tm.logger, "kiro token request", req, reqBody)
 
 		resp, err := tm.client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("AWS IdC token refresh request: %w", err)
 			continue
 		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+		debugKiroHTTPResponse(tm.logger, "kiro token response", resp, body)
+		if readErr != nil {
+			return nil, fmt.Errorf("read AWS IdC token refresh response: %w", readErr)
+		}
 
 		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("AWS IdC token refresh status: %d", resp.StatusCode)
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			_ = resp.Body.Close()
 			return nil, fmt.Errorf("AWS IdC token refresh status: %d", resp.StatusCode)
 		}
 
@@ -220,11 +229,9 @@ func (tm *TokenManager) refreshAWSIdC(lt *LoginToken) (*TokenInfo, error) {
 			RefreshToken string `json:"refreshToken"`
 			ExpiresIn    int    `json:"expiresIn"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			_ = resp.Body.Close()
+		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, fmt.Errorf("decode AWS IdC token refresh: %w", err)
 		}
-		_ = resp.Body.Close()
 
 		if result.RefreshToken != "" {
 			lt.RefreshToken = result.RefreshToken
@@ -260,20 +267,31 @@ func (tm *TokenManager) refreshOAuth2(lt *LoginToken) (*TokenInfo, error) {
 			time.Sleep(retryBackoff[attempt-1])
 		}
 
-		resp, err := tm.client.PostForm(lt.TokenEndpoint, form)
+		reqBody := []byte(form.Encode())
+		req, err := http.NewRequest("POST", lt.TokenEndpoint, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("create login token refresh request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		debugKiroHTTPRequest(tm.logger, "kiro token request", req, reqBody)
+		resp, err := tm.client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("login token refresh request: %w", err)
 			continue
 		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+		debugKiroHTTPResponse(tm.logger, "kiro token response", resp, body)
+		if readErr != nil {
+			return nil, fmt.Errorf("read login token refresh response: %w", readErr)
+		}
 
 		if resp.StatusCode >= 500 {
-			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("login token refresh status: %d", resp.StatusCode)
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			_ = resp.Body.Close()
 			return nil, fmt.Errorf("login token refresh status: %d", resp.StatusCode)
 		}
 
@@ -282,11 +300,9 @@ func (tm *TokenManager) refreshOAuth2(lt *LoginToken) (*TokenInfo, error) {
 			RefreshToken string `json:"refresh_token"`
 			ExpiresIn    int    `json:"expires_in"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			_ = resp.Body.Close()
+		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, fmt.Errorf("decode login token refresh: %w", err)
 		}
-		_ = resp.Body.Close()
 
 		if result.RefreshToken != "" {
 			lt.RefreshToken = result.RefreshToken

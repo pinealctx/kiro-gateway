@@ -1,7 +1,7 @@
 .PHONY: fmt lint build test check setup-hooks
 
 VERSION ?= dev
-LDFLAGS ?= -s -w -X github.com/pinealctx/anti-gateway/internal/config.Version=$(VERSION)
+LDFLAGS ?= -s -w -X github.com/pinealctx/kiro-gateway/version.Version=$(VERSION)
 
 fmt:
 	go fmt ./...

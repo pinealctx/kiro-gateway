@@ -2,16 +2,16 @@ package routes
 
 import (
 	"crypto/hmac"
+	"net"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pinealctx/anti-gateway/api/handlers"
-	"github.com/pinealctx/anti-gateway/config"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	"github.com/pinealctx/anti-gateway/middleware"
-	"github.com/pinealctx/anti-gateway/tenant"
-	"github.com/pinealctx/anti-gateway/web"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/pinealctx/kiro-gateway/api/handlers"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/middleware"
+	"github.com/pinealctx/kiro-gateway/tenant"
+	"github.com/pinealctx/kiro-gateway/version"
+	"github.com/pinealctx/kiro-gateway/web"
 	"go.uber.org/zap"
 )
 
@@ -19,11 +19,9 @@ import (
 type RouterConfig struct {
 	Registry        *providers.Registry
 	Logger          *zap.Logger
-	APIKey          string        // Legacy single-key auth (used when TenantAuth is false)
-	AdminKey        string        // Admin API authentication key
-	Store           *tenant.Store // Always set — used for provider/key storage
-	TenantAuth      bool          // true = per-key auth via Store; false = single api_key auth
-	RateLimiter     *tenant.RateLimiter
+	AdminKey        string                   // Admin API authentication key
+	AdminLocalOnly  bool                     // Restrict Admin API to loopback clients
+	Store           *tenant.Store            // Always set — used for provider/key storage
 	CORSOrigins     []string                 // Allowed CORS origins (empty = allow all)
 	ProviderFactory handlers.ProviderFactory // Factory for dynamic provider management
 }
@@ -33,30 +31,49 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 	r := gin.New()
 
 	// Global middleware
-	r.Use(gin.Recovery())
+	r.Use(gin.CustomRecovery(func(c *gin.Context, recovered any) {
+		reqID, _ := c.Get("request_id")
+		if reqID == nil {
+			reqID = ""
+		}
+		cfg.Logger.Error("panic recovered",
+			zap.Any("panic", recovered),
+			zap.String("request_id", reqID.(string)),
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.Request.URL.Path),
+			zap.String("client_ip", c.ClientIP()),
+		)
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(cfg.Logger))
-	r.Use(middleware.Metrics())
 	r.Use(middleware.CORS(cfg.CORSOrigins))
 
 	// Root endpoint: service info
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"name":    "AntiGateway",
-			"version": config.Version,
+			"name":    "Kiro Gateway",
+			"version": version.Get(),
 			"endpoints": []string{
 				"/v1/chat/completions",
-				"/v1/embeddings",
 				"/v1/models",
 				"/v1/messages",
 				"/v1/messages/count_tokens",
+				"/v1/kiro/usage-limits",
+				"/a/{kiro_account}/v1/chat/completions",
+				"/a/{kiro_account}/v1/models",
+				"/a/{kiro_account}/v1/messages",
+				"/a/{kiro_account}/v1/messages/count_tokens",
+				"/a/{kiro_account}/v1/kiro/usage-limits",
 				"/health",
-				"/metrics",
 				"/admin/keys",
-				"/admin/providers",
+				"/admin/accounts",
 				"/admin/usage",
 				"/admin/kiro/login",
+				"/admin/kiro/device-login",
 				"/admin/kiro/status",
+				"/admin/kiro/usage-limits",
+				"/admin/kiro/models",
 				"/ui",
 			},
 		})
@@ -65,14 +82,12 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 	// Health check (no auth)
 	r.GET("/health", func(c *gin.Context) {
 		status := gin.H{"status": "ok"}
+		status["version"] = version.Get()
 		for name, p := range cfg.Registry.All() {
 			status[name] = p.IsHealthy(c.Request.Context())
 		}
 		c.JSON(http.StatusOK, status)
 	})
-
-	// Prometheus metrics (no auth)
-	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Web admin UI (no auth — SPA handles admin key via localStorage)
 	// Handle both /ui and /ui/* with the same handler for SPA routing
@@ -80,30 +95,36 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 	r.GET("/ui", uiHandler)
 	r.GET("/ui/*filepath", uiHandler)
 
-	// API routes (with auth)
-	api := r.Group("/")
-	if cfg.TenantAuth && cfg.Store != nil {
-		// Multi-tenant auth (per-key with rate limits)
-		api.Use(middleware.TenantAuth(cfg.Store, cfg.RateLimiter))
-	} else {
-		// Legacy single-key auth
-		api.Use(middleware.Auth(cfg.APIKey))
+	openaiH := handlers.NewOpenAIHandler(cfg.Registry, cfg.Store, cfg.Logger)
+	anthropicH := handlers.NewAnthropicHandler(cfg.Registry, cfg.Store, cfg.Logger)
+	kiroUsageH := handlers.NewKiroUsageHandler(cfg.Registry)
+	registerRuntimeRoutes := func(group *gin.RouterGroup) {
+		// OpenAI-compatible endpoints
+		group.POST("/v1/chat/completions", openaiH.ChatCompletions)
+		group.GET("/v1/models", openaiH.Models)
+
+		// Anthropic-compatible endpoints
+		group.POST("/v1/messages", anthropicH.Messages)
+		group.POST("/v1/messages/count_tokens", anthropicH.CountTokens)
+
+		// Kiro account quota endpoint, authenticated by the same API key.
+		group.GET("/v1/kiro/usage-limits", kiroUsageH.GetUsageLimits)
 	}
 
-	// OpenAI-compatible endpoints
-	openaiH := handlers.NewOpenAIHandler(cfg.Registry, cfg.Logger)
-	api.POST("/v1/chat/completions", openaiH.ChatCompletions)
-	api.POST("/v1/embeddings", openaiH.Embeddings)
-	api.GET("/v1/models", openaiH.Models)
+	api := r.Group("/")
+	api.Use(middleware.TenantAuth(cfg.Store))
+	registerRuntimeRoutes(api)
 
-	// Anthropic-compatible endpoints
-	anthropicH := handlers.NewAnthropicHandler(cfg.Registry, cfg.Logger)
-	api.POST("/v1/messages", anthropicH.Messages)
-	api.POST("/v1/messages/count_tokens", anthropicH.CountTokens)
+	accountAPI := r.Group("/a/:kiro_account")
+	accountAPI.Use(middleware.TenantAuth(cfg.Store))
+	registerRuntimeRoutes(accountAPI)
 
 	// Admin API (separate auth with admin key)
 	if cfg.Store != nil {
 		admin := r.Group("/admin")
+		if cfg.AdminLocalOnly {
+			admin.Use(localOnlyAdmin())
+		}
 		admin.Use(adminAuth(cfg.AdminKey))
 
 		adminH := handlers.NewAdminHandler(cfg.Store, cfg.Registry, cfg.ProviderFactory, cfg.Logger)
@@ -112,31 +133,42 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 		admin.GET("/keys/:id", adminH.GetKey)
 		admin.PUT("/keys/:id", adminH.UpdateKey)
 		admin.DELETE("/keys/:id", adminH.DeleteKey)
-		admin.GET("/providers", adminH.ListProviders)
-		admin.POST("/providers", adminH.CreateProvider)
-		admin.GET("/providers/:id", adminH.GetProvider)
-		admin.PUT("/providers/:id", adminH.UpdateProvider)
-		admin.DELETE("/providers/:id", adminH.DeleteProvider)
-		admin.GET("/usage", adminH.GetUsage)
 
-		// Copilot device flow management (dynamic provider lookup)
-		copilotH := handlers.NewCopilotAdminHandler(cfg.Registry, cfg.Store)
-		admin.POST("/auth/device-code", copilotH.StartDeviceFlow)
-		admin.GET("/auth/poll/:id", copilotH.PollDeviceFlow)
-		admin.POST("/auth/complete/:id", copilotH.CompleteDeviceFlow)
-		admin.GET("/copilot/status", copilotH.GetStatus)
+		admin.GET("/accounts", adminH.ListProviders)
+		admin.POST("/accounts", adminH.CreateProvider)
+		admin.GET("/accounts/:id", adminH.GetProvider)
+		admin.PUT("/accounts/:id", adminH.UpdateProvider)
+		admin.DELETE("/accounts/:id", adminH.DeleteProvider)
+
+		admin.GET("/usage", adminH.GetUsage)
 
 		// Kiro PKCE login management (dynamic provider lookup)
 		kiroH := handlers.NewKiroAdminHandler(cfg.Registry)
 		admin.POST("/kiro/login", kiroH.StartLogin)
+		admin.POST("/kiro/device-login", kiroH.StartDeviceLogin)
 		admin.GET("/kiro/login/:id", kiroH.GetLoginStatus)
 		admin.POST("/kiro/login/complete/:id", kiroH.CompleteLogin)
 		admin.GET("/kiro/status", kiroH.GetStatus)
+		admin.GET("/kiro/usage-limits", kiroH.GetUsageLimits)
+		admin.GET("/kiro/models", kiroH.GetModels)
 		admin.POST("/kiro/refresh", kiroH.RefreshToken)
 		admin.POST("/kiro/import-local", kiroH.ImportLocal)
 	}
 
 	return r
+}
+
+func localOnlyAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := net.ParseIP(c.ClientIP())
+		if ip == nil || !ip.IsLoopback() {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": gin.H{"message": "Admin API is restricted to localhost", "type": "permission_error"},
+			})
+			return
+		}
+		c.Next()
+	}
 }
 
 // adminAuth is a simple bearer token auth for admin endpoints.

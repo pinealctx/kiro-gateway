@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pinealctx/anti-gateway/core/converter"
-	"github.com/pinealctx/anti-gateway/core/providers"
-	"github.com/pinealctx/anti-gateway/core/sanitizer"
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/core/converter"
+	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/core/sanitizer"
+	"github.com/pinealctx/kiro-gateway/core/thinking"
+	"github.com/pinealctx/kiro-gateway/models"
 	"go.uber.org/zap"
 )
 
@@ -28,20 +30,26 @@ type Provider struct {
 	authMgr    *KiroAuthManager
 	logger     *zap.Logger
 	profileArn string
+	region     string
 	kvStore    KVStore
 	stopCh     chan struct{}
 }
 
 // NewProvider creates a Kiro provider using the built-in PKCE login flow.
-func NewProvider(name string, logger *zap.Logger) *Provider {
+func NewProvider(name string, logger *zap.Logger, region ...string) *Provider {
 	tm := NewTokenManager(logger)
+	r := "us-east-1"
+	if len(region) > 0 {
+		r = normalizeRegion(region[0])
+	}
 
 	p := &Provider{
 		name:     name,
 		tokenMgr: tm,
-		client:   NewCWClient(logger),
+		client:   NewCWClient(logger, r),
 		authMgr:  NewKiroAuthManager(logger),
 		logger:   logger,
+		region:   r,
 		stopCh:   make(chan struct{}),
 	}
 
@@ -177,6 +185,7 @@ func (p *Provider) TokenStatus() map[string]any {
 		"has_login":   p.tokenMgr.loginToken != nil,
 		"has_current": p.tokenMgr.current != nil,
 		"profile_arn": p.profileArn,
+		"region":      p.region,
 	}
 	if p.tokenMgr.current != nil {
 		status["expires_at"] = p.tokenMgr.current.ExpiresAt
@@ -195,6 +204,7 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *models.ChatCompletio
 	}()
 
 	var fullContent string
+	var reasoningContent string
 	var toolCalls []models.ToolCall
 	var finishReason string
 
@@ -203,6 +213,7 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *models.ChatCompletio
 			return nil, chunk.Error
 		}
 		fullContent += chunk.Content
+		reasoningContent += chunk.ReasoningContent
 		if len(chunk.ToolCalls) > 0 {
 			toolCalls = append(toolCalls, chunk.ToolCalls...)
 		}
@@ -224,9 +235,10 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *models.ChatCompletio
 			{
 				Index: 0,
 				Message: models.ChatMessage{
-					Role:      "assistant",
-					Content:   models.RawString(fullContent),
-					ToolCalls: toolCalls,
+					Role:             "assistant",
+					Content:          models.RawString(fullContent),
+					ReasoningContent: reasoningContent,
+					ToolCalls:        toolCalls,
 				},
 				FinishReason: finishReason,
 			},
@@ -255,17 +267,53 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 		return err
 	}
 
+	thinkCfg := thinking.ParseConfig(req.Extras)
+	var parser *thinking.Parser
+	if thinkCfg.Enabled {
+		parser = thinking.NewParser()
+	}
+	clientToolNames := sanitizer.ClientToolNameSet(openAIToolsAsMaps(req.Tools))
+
 	for evt := range events {
 		switch evt.Type {
 		case "text":
 			sanitized := sanitizer.SanitizeText(evt.Content, true)
 			if sanitized != "" {
-				stream <- providers.StreamChunk{Content: sanitized}
+				if parser != nil {
+					for _, seg := range parser.Push(sanitized) {
+						if seg.Type == thinking.SegmentThinking {
+							stream <- providers.StreamChunk{ReasoningContent: seg.Text}
+						} else {
+							stream <- providers.StreamChunk{Content: seg.Text}
+						}
+					}
+				} else {
+					stream <- providers.StreamChunk{Content: sanitized}
+				}
 			}
 
 		case "tool_use":
-			if evt.ToolUse != nil && !sanitizer.IsBuiltinTool(evt.ToolUse.Name) {
-				input := evt.ToolUse.Input
+			if evt.ToolUse == nil {
+				continue
+			}
+
+			toolName := evt.ToolUse.Name
+			toolInput := evt.ToolUse.Input
+			if sanitizer.IsBuiltinTool(toolName) {
+				remappedName, remappedInput, ok := sanitizer.RemapBuiltinTool(toolName, toolInput, clientToolNames)
+				if !ok {
+					p.logger.Debug("filtered kiro builtin tool call", zap.String("tool", toolName))
+					continue
+				}
+				p.logger.Debug("remapped kiro builtin tool call",
+					zap.String("from", toolName),
+					zap.String("to", remappedName))
+				toolName = remappedName
+				toolInput = remappedInput
+			}
+
+			if toolName != "" {
+				input := toolInput
 				if input == nil {
 					input = map[string]any{}
 				}
@@ -279,7 +327,7 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 							ID:   evt.ToolUse.ToolUseID,
 							Type: "function",
 							Function: models.ToolCallFunction{
-								Name:      evt.ToolUse.Name,
+								Name:      toolName,
 								Arguments: string(inputJSON),
 							},
 						},
@@ -302,6 +350,16 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 		}
 	}
 
+	if parser != nil {
+		for _, seg := range parser.Flush() {
+			if seg.Type == thinking.SegmentThinking {
+				stream <- providers.StreamChunk{ReasoningContent: seg.Text}
+			} else {
+				stream <- providers.StreamChunk{Content: seg.Text}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -321,6 +379,7 @@ func (p *Provider) GetTokenInfo() map[string]any {
 	info := map[string]any{
 		"healthy":   hasToken,
 		"has_token": hasToken,
+		"region":    p.region,
 	}
 	if p.profileArn != "" {
 		info["profile_arn"] = p.profileArn
@@ -328,7 +387,36 @@ func (p *Provider) GetTokenInfo() map[string]any {
 	return info
 }
 
+func normalizeRegion(region string) string {
+	region = strings.ToLower(strings.TrimSpace(region))
+	if region == "" {
+		return "us-east-1"
+	}
+	return region
+}
+
 // Stop shuts down the provider's background goroutines.
 func (p *Provider) Stop() {
 	close(p.stopCh)
+}
+
+func openAIToolsAsMaps(tools []models.Tool) []map[string]any {
+	result := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		fn := map[string]any{
+			"name":        tool.Function.Name,
+			"description": tool.Function.Description,
+		}
+		if len(tool.Function.Parameters) > 0 {
+			var params any
+			if err := json.Unmarshal(tool.Function.Parameters, &params); err == nil {
+				fn["parameters"] = params
+			}
+		}
+		result = append(result, map[string]any{
+			"type":     tool.Type,
+			"function": fn,
+		})
+	}
+	return result
 }

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pinealctx/anti-gateway/models"
+	"github.com/pinealctx/kiro-gateway/models"
 )
 
 // ============================================================

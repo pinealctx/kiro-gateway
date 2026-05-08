@@ -176,3 +176,28 @@ func TestFilterToolCalls(t *testing.T) {
 		t.Errorf("filtered = %v", got)
 	}
 }
+
+func TestRemapBuiltinTool(t *testing.T) {
+	clientTools := map[string]bool{"Read": true, "Bash": true, "WebSearch": true}
+
+	name, input, ok := RemapBuiltinTool("readFile", map[string]any{"relativePath": "main.go"}, clientTools)
+	if !ok || name != "Read" {
+		t.Fatalf("readFile remap = (%q, %v), ok=%v", name, input, ok)
+	}
+	if input.(map[string]any)["file_path"] != "main.go" {
+		t.Errorf("readFile input = %v", input)
+	}
+
+	name, input, ok = RemapBuiltinTool("listDirectory", map[string]any{"path": "src"}, clientTools)
+	if !ok || name != "Bash" {
+		t.Fatalf("listDirectory remap = (%q, %v), ok=%v", name, input, ok)
+	}
+	if !strings.Contains(input.(map[string]any)["command"].(string), "src") {
+		t.Errorf("listDirectory command = %v", input)
+	}
+
+	_, _, ok = RemapBuiltinTool("smartRelocate", map[string]any{}, clientTools)
+	if ok {
+		t.Error("smartRelocate should not remap without a supported client tool")
+	}
+}

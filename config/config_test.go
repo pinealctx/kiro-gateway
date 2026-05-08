@@ -19,15 +19,7 @@ server:
   port: 9090
   log_level: "debug"
 
-auth:
-  api_key: "sk-test-key"
-
-defaults:
-  provider: "openai"
-  model: "gpt-4o"
-
 tenant:
-  enabled: true
   db_path: "test.db"
 `
 	path := writeTemp(t, "config.yaml", yaml)
@@ -48,25 +40,13 @@ tenant:
 	if gw.Server.Port != 9090 {
 		t.Errorf("port = %d", gw.Server.Port)
 	}
-	if gw.Auth.APIKey != "sk-test-key" {
-		t.Error("api key mismatch")
-	}
-	if gw.Defaults.Provider != "openai" {
-		t.Errorf("default provider = %q", gw.Defaults.Provider)
-	}
-	if !gw.Tenant.Enabled {
-		t.Error("tenant should be enabled")
-	}
 	if gw.Tenant.DBPath != "test.db" {
 		t.Errorf("db_path = %q", gw.Tenant.DBPath)
 	}
 }
 
 func TestLoadFromFile_Defaults(t *testing.T) {
-	yaml := `
-defaults:
-  model: "test-model"
-`
+	yaml := `{}`
 	path := writeTemp(t, "minimal.yaml", yaml)
 	cmd := newTestCmd()
 	cmd.SetArgs([]string{"--config", path})
@@ -87,8 +67,8 @@ defaults:
 	if gw.Server.LogLevel != "info" {
 		t.Errorf("default log_level = %q", gw.Server.LogLevel)
 	}
-	if gw.Defaults.Model != "test-model" {
-		t.Errorf("model = %q", gw.Defaults.Model)
+	if !gw.Auth.AdminLocalOnly {
+		t.Error("default admin_local_only should be true")
 	}
 }
 
@@ -143,7 +123,7 @@ server:
 
 func TestSynthesizeFromFlags(t *testing.T) {
 	cmd := newTestCmd()
-	cmd.SetArgs([]string{"--port", "7070", "--api-key", "my-key"})
+	cmd.SetArgs([]string{"--port", "7070", "--admin-key", "admin-key"})
 	cmd.Execute()
 
 	gw, err := LoadGatewayConfig(cmd)
@@ -154,14 +134,29 @@ func TestSynthesizeFromFlags(t *testing.T) {
 	if gw.Server.Port != 7070 {
 		t.Errorf("port = %d", gw.Server.Port)
 	}
-	if gw.Auth.APIKey != "my-key" {
-		t.Error("api key mismatch")
+	if gw.Auth.AdminKey != "admin-key" {
+		t.Error("admin key mismatch")
 	}
-	if gw.Defaults.Provider != "" {
-		t.Errorf("should default to empty provider, got %q", gw.Defaults.Provider)
+	if !gw.Auth.AdminLocalOnly {
+		t.Error("admin_local_only should default to true")
 	}
 	if gw.Tenant.DBPath != DefaultDBPath() {
 		t.Errorf("db_path = %q, want %q", gw.Tenant.DBPath, DefaultDBPath())
+	}
+}
+
+func TestSynthesizeFromFlags_AdminLocalOnlyCanBeDisabled(t *testing.T) {
+	cmd := newTestCmd()
+	cmd.SetArgs([]string{"--admin-local-only=false"})
+	cmd.Execute()
+
+	gw, err := LoadGatewayConfig(cmd)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if gw.Auth.AdminLocalOnly {
+		t.Error("admin_local_only should be false when disabled by CLI")
 	}
 }
 
