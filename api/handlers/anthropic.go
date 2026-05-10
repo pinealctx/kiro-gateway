@@ -363,13 +363,14 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 			break
 		}
 
-		if truncated && !hasToolUse && continueCount < continuation.MaxContinuations && continuation.ShouldAutoContinue(fullOutput, req.Messages) {
+		shouldContinue := truncated && !hasToolUse && continuation.ShouldAutoContinue(fullOutput, req.Messages)
+		if shouldContinue && continueCount < continuation.MaxContinuations {
 			continueCount++
 			h.logger.Info("auto-continuing (anthropic)", zap.Int("round", continueCount))
 			req.Messages = continuation.BuildContinuationMessages(req.Messages, fullOutput)
 			continue
 		}
-		outputTruncated = truncated
+		outputTruncated = truncated && shouldContinue
 
 		break
 	}

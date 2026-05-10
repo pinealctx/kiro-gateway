@@ -845,7 +845,7 @@ func TestAnthropic_Messages_StreamThinkingOnlyAddsPlaceholderText(t *testing.T) 
 	}
 }
 
-func TestAnthropic_Messages_StreamLengthStopReason(t *testing.T) {
+func TestAnthropic_Messages_StreamShortLengthDoesNotReportMaxTokens(t *testing.T) {
 	mock := &mockProvider{
 		name: "kiro",
 		chunks: []providers.StreamChunk{
@@ -864,8 +864,8 @@ func TestAnthropic_Messages_StreamLengthStopReason(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
 	}
-	if body := w.Body.String(); !strings.Contains(body, `"stop_reason":"max_tokens"`) {
-		t.Fatalf("expected max_tokens stop reason, got:\n%s", body)
+	if body := w.Body.String(); !strings.Contains(body, `"stop_reason":"end_turn"`) {
+		t.Fatalf("expected end_turn stop reason for bridge-style false truncation, got:\n%s", body)
 	}
 }
 
