@@ -255,6 +255,50 @@ func TestConvertTools_SanitizesUnsupportedSchemaFields(t *testing.T) {
 	}
 }
 
+func TestOpenAIToCW_CurrentMessageMatchesBridgeShape(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-haiku-4-5-20251001",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: models.RawString("hello")},
+		},
+	}
+	cw, err := OpenAIToCW(req, "")
+	if err != nil {
+		t.Fatalf("OpenAIToCW: %v", err)
+	}
+	data, err := json.Marshal(cw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	state := got["conversationState"].(map[string]any)
+	current := state["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	if _, ok := current["images"].([]any); !ok {
+		t.Fatalf("current images should be present as an array: %s", string(data))
+	}
+	ctx, ok := current["userInputMessageContext"].(map[string]any)
+	if !ok {
+		t.Fatalf("current message context should be present: %s", string(data))
+	}
+	if _, ok := ctx["toolResults"].([]any); !ok {
+		t.Fatalf("toolResults should be present as an array: %s", string(data))
+	}
+	if _, ok := ctx["tools"].([]any); !ok {
+		t.Fatalf("tools should be present as an array: %s", string(data))
+	}
+	history := state["history"].([]any)
+	assistant := history[1].(map[string]any)["assistantResponseMessage"].(map[string]any)
+	if _, exists := assistant["messageId"]; exists {
+		t.Fatalf("bridge-shaped assistant history should not include messageId: %s", string(data))
+	}
+	if _, exists := assistant["toolUses"]; !exists {
+		t.Fatalf("assistant history should include toolUses:null: %s", string(data))
+	}
+}
+
 func TestOpenAIToCW_ToolResultTruncated(t *testing.T) {
 	longContent := strings.Repeat("x", 60000)
 	req := &models.ChatCompletionRequest{
@@ -270,14 +314,17 @@ func TestOpenAIToCW_ToolResultTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Tool result should be in the current message context, truncated to 50000
+	// Tool result should be in the current message context, truncated like Kiro Bridge.
 	ctx := cw.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
 	if ctx == nil || len(ctx.ToolResults) == 0 {
 		t.Fatal("expected tool results")
 	}
 	resultText := ctx.ToolResults[0].Content[0].Text
-	if len(resultText) > 50000 {
-		t.Errorf("tool result should be truncated to 50000, got %d", len(resultText))
+	if len(resultText) != 50000+len("\n...(truncated)") {
+		t.Errorf("tool result should be truncated with marker, got %d", len(resultText))
+	}
+	if !strings.HasSuffix(resultText, "\n...(truncated)") {
+		t.Error("tool result should include truncation marker")
 	}
 }
 

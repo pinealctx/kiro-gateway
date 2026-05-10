@@ -1,5 +1,7 @@
 package models
 
+import "encoding/json"
+
 // ========================
 // CodeWhisperer (CW) types — Kiro backend
 // ========================
@@ -26,11 +28,59 @@ type CWUserInputMessage struct {
 	Origin                  string            `json:"origin"`
 	UserInputMessageContext *CWMessageContext `json:"userInputMessageContext,omitempty"`
 	Images                  []CWImage         `json:"images,omitempty"`
+	ForceImages             bool              `json:"-"`
 }
 
 type CWMessageContext struct {
-	ToolResults []CWToolResult `json:"toolResults,omitempty"`
-	Tools       []CWTool       `json:"tools,omitempty"`
+	ToolResults []CWToolResult `json:"toolResults"`
+	Tools       []CWTool       `json:"tools"`
+	ForceEmpty  bool           `json:"-"`
+}
+
+func (m CWUserInputMessage) MarshalJSON() ([]byte, error) {
+	out := map[string]any{
+		"content": m.Content,
+		"modelId": m.ModelID,
+		"origin":  m.Origin,
+	}
+	if m.UserInputMessageContext != nil {
+		out["userInputMessageContext"] = m.UserInputMessageContext
+	}
+	if m.ForceImages || len(m.Images) > 0 {
+		if m.Images == nil {
+			out["images"] = []CWImage{}
+		} else {
+			out["images"] = m.Images
+		}
+	}
+	return json.Marshal(out)
+}
+
+func (m CWMessageContext) MarshalJSON() ([]byte, error) {
+	if m.ForceEmpty {
+		type messageContext struct {
+			ToolResults []CWToolResult `json:"toolResults"`
+			Tools       []CWTool       `json:"tools"`
+		}
+		if m.ToolResults == nil {
+			m.ToolResults = []CWToolResult{}
+		}
+		if m.Tools == nil {
+			m.Tools = []CWTool{}
+		}
+		return json.Marshal(messageContext{
+			ToolResults: m.ToolResults,
+			Tools:       m.Tools,
+		})
+	}
+	type messageContext struct {
+		ToolResults []CWToolResult `json:"toolResults,omitempty"`
+		Tools       []CWTool       `json:"tools,omitempty"`
+	}
+	return json.Marshal(messageContext{
+		ToolResults: m.ToolResults,
+		Tools:       m.Tools,
+	})
 }
 
 type CWToolResult struct {
@@ -75,7 +125,7 @@ type CWHistoryEntry struct {
 type CWAssistantResponseMessage struct {
 	MessageID string      `json:"messageId,omitempty"`
 	Content   string      `json:"content"`
-	ToolUses  []CWToolUse `json:"toolUses,omitempty"`
+	ToolUses  []CWToolUse `json:"toolUses"`
 }
 
 type CWToolUse struct {

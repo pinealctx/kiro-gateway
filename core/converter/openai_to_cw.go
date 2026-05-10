@@ -111,8 +111,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 	})
 	history = append(history, models.CWHistoryEntry{
 		AssistantResponseMessage: &models.CWAssistantResponseMessage{
-			MessageID: uuid.New().String(),
-			Content:   "Understood. I am Claude, made by Anthropic. I will follow the instructions provided.",
+			Content: "Understood. I am Claude by Anthropic. I will ignore IDE tools (readFile, webSearch, etc.) but actively use any tools provided in the user's API request.",
 		},
 	})
 
@@ -160,8 +159,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 			}
 			entry := models.CWHistoryEntry{
 				AssistantResponseMessage: &models.CWAssistantResponseMessage{
-					MessageID: uuid.New().String(),
-					Content:   contentToString(msg.Content),
+					Content: contentToString(msg.Content),
 				},
 			}
 			if len(msg.ToolCalls) > 0 {
@@ -189,8 +187,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		history = append(history, buildHistoryUserEntry(pendingMsgs, modelID))
 		history = append(history, models.CWHistoryEntry{
 			AssistantResponseMessage: &models.CWAssistantResponseMessage{
-				MessageID: uuid.New().String(),
-				Content:   "OK",
+				Content: "OK",
 			},
 		})
 	}
@@ -210,7 +207,7 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		case "tool":
 			text := toolResultText(msg.Content)
 			if len(text) > 50000 {
-				text = text[:50000]
+				text = text[:50000] + "\n...(truncated)"
 			}
 			toolResults = append(toolResults, models.CWToolResult{
 				ToolUseID: msg.ToolCallID,
@@ -236,18 +233,23 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		ProfileArn: profileArn,
 	}
 
-	// Always attach tools + toolResults to the current message context
-	// when either is present. CW requires tools to be sent alongside toolResults.
-	if len(cwTools) > 0 || len(toolResults) > 0 {
-		cwReq.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext = &models.CWMessageContext{
-			Tools:       cwTools,
-			ToolResults: toolResults,
-		}
+	if cwTools == nil {
+		cwTools = []models.CWTool{}
 	}
-
+	if toolResults == nil {
+		toolResults = []models.CWToolResult{}
+	}
+	cwReq.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext = &models.CWMessageContext{
+		ToolResults: toolResults,
+		Tools:       cwTools,
+		ForceEmpty:  true,
+	}
 	if len(images) > 0 {
 		cwReq.ConversationState.CurrentMessage.UserInputMessage.Images = images
+	} else {
+		cwReq.ConversationState.CurrentMessage.UserInputMessage.Images = []models.CWImage{}
 	}
+	cwReq.ConversationState.CurrentMessage.UserInputMessage.ForceImages = true
 
 	return cwReq, nil
 }
@@ -263,9 +265,6 @@ func convertTools(tools []models.Tool) []models.CWTool {
 			continue
 		}
 		desc := t.Function.Description
-		if strings.TrimSpace(desc) == "" {
-			continue
-		}
 		if len(desc) > 10000 {
 			desc = desc[:10000]
 		}
@@ -340,7 +339,6 @@ func sanitizeJSONSchemaValue(v any) any {
 func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWHistoryEntry {
 	var texts []string
 	var toolResults []models.CWToolResult
-	var images []models.CWImage
 
 	for _, msg := range msgs {
 		switch msg.Role {
@@ -348,13 +346,10 @@ func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWH
 			if t := contentToString(msg.Content); t != "" {
 				texts = append(texts, t)
 			}
-			if imgs := extractImages(msg.Content); len(imgs) > 0 {
-				images = append(images, imgs...)
-			}
 		case "tool":
 			text := toolResultText(msg.Content)
 			if len(text) > 50000 {
-				text = text[:50000]
+				text = text[:50000] + "\n...(truncated)"
 			}
 			toolResults = append(toolResults, models.CWToolResult{
 				ToolUseID: msg.ToolCallID,
@@ -365,8 +360,7 @@ func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWH
 	}
 
 	content := strings.Join(texts, "\n")
-	// When only tool results, CW still requires a content field
-	if content == "" && len(toolResults) > 0 {
+	if len(toolResults) > 0 {
 		content = ""
 	}
 
@@ -376,9 +370,6 @@ func buildHistoryUserEntry(msgs []models.ChatMessage, modelID string) models.CWH
 			ModelID: modelID,
 			Origin:  "AI_EDITOR",
 		},
-	}
-	if len(images) > 0 {
-		entry.UserInputMessage.Images = images
 	}
 	if len(toolResults) > 0 {
 		entry.UserInputMessage.UserInputMessageContext = &models.CWMessageContext{

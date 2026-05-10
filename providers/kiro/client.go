@@ -12,7 +12,6 @@ import (
 	"os/user"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/pinealctx/kiro-gateway/core/eventstream"
 	"github.com/pinealctx/kiro-gateway/core/logutil"
 	"github.com/pinealctx/kiro-gateway/models"
@@ -102,15 +101,11 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 			return nil, fmt.Errorf("create request: %w", err)
 		}
 
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", "application/x-amz-json-1.0")
 		req.Header.Set("x-amz-target", cwTarget)
 		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-		req.Header.Set("User-Agent", c.userAgent())
-		req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroIDE-0.7.45-"+c.fingerprint)
+		req.Header.Set("User-Agent", "kiro-cli-chat-macos-aarch64-1.27.2")
 		req.Header.Set("x-amzn-codewhisperer-optout", "true")
-		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
-		req.Header.Set("amz-sdk-invocation-id", uuid.NewString())
-		req.Header.Set("amz-sdk-request", fmt.Sprintf("attempt=%d; max=%d", attempt+1, maxRetries+1))
 		if token.IsExternalIdP {
 			req.Header.Set("TokenType", "EXTERNAL_IDP")
 		}
