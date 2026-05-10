@@ -80,6 +80,9 @@ func TestLoadFromFile_Defaults(t *testing.T) {
 	if gw.Defaults.MaxPayloadBytes != 600000 {
 		t.Errorf("default max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
 	}
+	if !gw.Defaults.AutoTrimPayload {
+		t.Error("default auto_trim_payload should be true")
+	}
 }
 
 func TestLoadFromFile_CLIOverridesFile(t *testing.T) {
@@ -163,11 +166,14 @@ func TestSynthesizeFromFlags(t *testing.T) {
 	if gw.Defaults.MaxPayloadBytes != 600000 {
 		t.Errorf("max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
 	}
+	if !gw.Defaults.AutoTrimPayload {
+		t.Error("auto_trim_payload should default to true")
+	}
 }
 
 func TestSynthesizeFromFlags_RuntimeOptionsCanDisableGuards(t *testing.T) {
 	cmd := newTestCmd()
-	cmd.SetArgs([]string{"--max-payload-bytes=0", "--auto-trim-payload"})
+	cmd.SetArgs([]string{"--max-payload-bytes=0", "--auto-trim-payload=false"})
 	cmd.Execute()
 
 	gw, err := LoadGatewayConfig(cmd)
@@ -178,8 +184,8 @@ func TestSynthesizeFromFlags_RuntimeOptionsCanDisableGuards(t *testing.T) {
 	if gw.Defaults.MaxPayloadBytes != 0 {
 		t.Errorf("max_payload_bytes = %d, want 0", gw.Defaults.MaxPayloadBytes)
 	}
-	if !gw.Defaults.AutoTrimPayload {
-		t.Error("auto_trim_payload should be true")
+	if gw.Defaults.AutoTrimPayload {
+		t.Error("auto_trim_payload should be false when disabled by CLI")
 	}
 }
 

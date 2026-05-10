@@ -380,6 +380,7 @@ func (p *Provider) applyPayloadGuard(cwReq *models.CWRequest) error {
 		return fmt.Errorf("kiro payload is too large: %d bytes exceeds %d bytes; enable auto_trim_payload or reduce conversation/tool history", size, limit)
 	}
 
+	originalSize := size
 	history := &cwReq.ConversationState.History
 	trimmed := 0
 	for size > limit && len(*history) > 2 {
@@ -398,6 +399,7 @@ func (p *Provider) applyPayloadGuard(cwReq *models.CWRequest) error {
 	}
 	p.logger.Info("trimmed Kiro payload history",
 		zap.Int("trimmed_entries", trimmed),
+		zap.Int("original_payload_bytes", originalSize),
 		zap.Int("payload_bytes", size),
 		zap.Int("max_payload_bytes", limit))
 	return nil

@@ -112,7 +112,7 @@ defaults:
   health_check_enabled: true
   health_check_seconds: 60
   max_payload_bytes: 600000
-  auto_trim_payload: false
+  auto_trim_payload: true
 
 tenant:
   db_path: "kiro-gateway.db"
@@ -127,7 +127,7 @@ Important runtime options:
 | `auth.admin_local_only` | `true` | Keeps `/admin/*` local-only even when public API routes listen on `0.0.0.0` |
 | `server.log_format` | `console` | Log output format: `console` for readable logs, `json` for structured logs |
 | `max_payload_bytes` | `600000` | Maximum serialized Kiro request size; set `0` to disable |
-| `auto_trim_payload` | `false` | Drops oldest history entries until the payload fits |
+| `auto_trim_payload` | `true` | Drops oldest history entries until the payload fits |
 
 ## Accounts and API Keys
 

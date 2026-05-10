@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-const maxDebugBodyLogBytes = 64 * 1024
+const maxDebugBodyLogBytes = 8 * 1024
 
 type bodyLogWriter struct {
 	gin.ResponseWriter

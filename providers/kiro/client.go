@@ -24,7 +24,7 @@ const (
 	cwTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 
 	maxRetries = 3
-	maxLogBody = 64 * 1024
+	maxLogBody = 8 * 1024
 
 	// Kiro's Q runtime endpoint is not available in every AWS/IDC region.
 	// Account regions are still used for login/token flows; API calls go to

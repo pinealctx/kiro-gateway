@@ -243,7 +243,7 @@ func newLogger(level, format string) (*zap.Logger, error) {
 	cfg.Encoding = format
 	if format == "console" {
 		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
 		cfg.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
 	}
 	parsedLevel := zapcore.InfoLevel
