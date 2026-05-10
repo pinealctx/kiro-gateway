@@ -59,6 +59,7 @@ func NewCWClient(logger *zap.Logger, _ string) *CWClient {
 type CWStreamEvent struct {
 	Type         string // "text", "tool_use", "context_usage", "exception", "end"
 	Content      string
+	Reasoning    string
 	ToolUse      *CWToolUseAccumulator
 	ContextUsage float64
 	Error        error
@@ -217,6 +218,14 @@ func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
 			var evt models.CWAssistantResponseEvent
 			if err := json.Unmarshal(raw.Payload, &evt); err == nil {
 				out <- CWStreamEvent{Type: "text", Content: evt.Content}
+			}
+
+		case "reasoningContentEvent":
+			var evt struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(raw.Payload, &evt); err == nil && evt.Text != "" {
+				out <- CWStreamEvent{Type: "reasoning", Reasoning: evt.Text}
 			}
 
 		case "toolUse":

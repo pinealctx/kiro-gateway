@@ -296,6 +296,11 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 				}
 			}
 
+		case "reasoning":
+			if evt.Reasoning != "" {
+				stream <- providers.StreamChunk{ReasoningContent: evt.Reasoning}
+			}
+
 		case "tool_use":
 			if evt.ToolUse == nil {
 				continue
