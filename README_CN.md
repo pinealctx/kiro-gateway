@@ -126,7 +126,7 @@ tenant:
 | `auth.admin_local_only` | `true` | 即使业务 API 监听 `0.0.0.0`，也限制 `/admin/*` 仅本机访问 |
 | `server.log_format` | `console` | 日志输出格式：`console` 为可读文本，`json` 为结构化日志 |
 | `max_payload_bytes` | `600000` | 序列化后的 Kiro 请求大小上限；设为 `0` 可禁用 |
-| `auto_trim_payload` | `true` | 自动丢弃最旧历史，直到 payload 大小符合限制 |
+| `auto_trim_payload` | `true` | 自动丢弃最旧历史，直到 payload 大小符合限制；裁剪会在 Kiro 限制下保留少量安全余量 |
 
 ## 账号与 API Key
 

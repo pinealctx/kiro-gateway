@@ -52,6 +52,25 @@ func TestApplyPayloadGuardTrimsOldestHistory(t *testing.T) {
 	}
 }
 
+func TestApplyPayloadGuardTrimsToSafetyTarget(t *testing.T) {
+	restore := runtimeConfig
+	defer func() { runtimeConfig = restore }()
+	ConfigureRuntime(RuntimeConfig{
+		MaxPayloadBytes: 100000,
+		AutoTrimPayload: true,
+	})
+
+	cwReq := payloadGuardRequest(80, strings.Repeat("x", 1500))
+	p := &Provider{logger: zap.NewNop()}
+
+	if err := p.applyPayloadGuard(cwReq); err != nil {
+		t.Fatalf("applyPayloadGuard: %v", err)
+	}
+	if size := cwPayloadSize(cwReq); size > payloadTrimLimit(runtimeConfig.MaxPayloadBytes) {
+		t.Fatalf("payload size = %d, want <= trim target %d", size, payloadTrimLimit(runtimeConfig.MaxPayloadBytes))
+	}
+}
+
 func payloadGuardRequest(historyEntries int, content string) *models.CWRequest {
 	history := make([]models.CWHistoryEntry, 0, historyEntries+2)
 	for i := 0; i < historyEntries; i++ {
