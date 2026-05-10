@@ -110,8 +110,6 @@ auth:
 defaults:
   health_check_enabled: true
   health_check_seconds: 60
-  max_payload_bytes: 0
-  auto_trim_payload: false
 
 tenant:
   db_path: "kiro-gateway.db"
@@ -125,8 +123,6 @@ tenant:
 |------|--------|------|
 | `auth.admin_local_only` | `true` | 即使业务 API 监听 `0.0.0.0`，也限制 `/admin/*` 仅本机访问 |
 | `server.log_format` | `console` | 日志输出格式：`console` 为可读文本，`json` 为结构化日志 |
-| `max_payload_bytes` | `0` | 序列化后的 Kiro 请求大小上限；默认禁用以对齐 Kiro Bridge |
-| `auto_trim_payload` | `false` | 可选的非 bridge guard 行为：自动丢弃最旧历史，直到 payload 大小符合限制 |
 
 ## 账号与 API Key
 

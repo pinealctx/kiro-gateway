@@ -111,8 +111,6 @@ auth:
 defaults:
   health_check_enabled: true
   health_check_seconds: 60
-  max_payload_bytes: 0
-  auto_trim_payload: false
 
 tenant:
   db_path: "kiro-gateway.db"
@@ -126,8 +124,6 @@ Important runtime options:
 |--------|---------|-------------|
 | `auth.admin_local_only` | `true` | Keeps `/admin/*` local-only even when public API routes listen on `0.0.0.0` |
 | `server.log_format` | `console` | Log output format: `console` for readable logs, `json` for structured logs |
-| `max_payload_bytes` | `0` | Maximum serialized Kiro request size; disabled by default for Kiro Bridge parity |
-| `auto_trim_payload` | `false` | Optional non-bridge guard behavior: drops oldest history entries until the payload fits |
 
 ## Accounts and API Keys
 

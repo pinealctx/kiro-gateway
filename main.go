@@ -71,10 +71,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		zap.Int("port", gwCfg.Server.Port),
 		zap.String("log_format", gwCfg.Server.LogFormat),
 	)
-	kiro.ConfigureRuntime(kiro.RuntimeConfig{
-		MaxPayloadBytes: gwCfg.Defaults.MaxPayloadBytes,
-		AutoTrimPayload: gwCfg.Defaults.AutoTrimPayload,
-	})
 
 	// Initialize Kiro account registry.
 	registry := providers.NewRegistry()

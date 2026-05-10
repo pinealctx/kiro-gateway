@@ -260,10 +260,6 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 		stream <- providers.StreamChunk{Error: fmt.Errorf("conversion error: %w", err)}
 		return err
 	}
-	if err := p.applyPayloadGuard(cwReq); err != nil {
-		stream <- providers.StreamChunk{Error: err}
-		return err
-	}
 
 	events, err := p.client.GenerateStream(ctx, cwReq, token)
 	if err != nil {
@@ -370,67 +366,6 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 	}
 
 	return nil
-}
-
-func (p *Provider) applyPayloadGuard(cwReq *models.CWRequest) error {
-	limit := runtimeConfig.MaxPayloadBytes
-	if limit <= 0 {
-		return nil
-	}
-	trimLimit := payloadTrimLimit(limit)
-	size := cwPayloadSize(cwReq)
-	if size <= trimLimit {
-		return nil
-	}
-	if !runtimeConfig.AutoTrimPayload {
-		if size <= limit {
-			return nil
-		}
-		return fmt.Errorf("kiro payload is too large: %d bytes exceeds %d bytes; enable auto_trim_payload or reduce conversation/tool history", size, limit)
-	}
-
-	originalSize := size
-	history := &cwReq.ConversationState.History
-	trimmed := 0
-	for size > trimLimit && len(*history) > 2 {
-		remove := 2
-		if len(*history) == 3 {
-			remove = 1
-		}
-		*history = append((*history)[:2], (*history)[2+remove:]...)
-		trimmed += remove
-		alignHistoryStart(history)
-		repairOrphanedToolResults(history)
-		size = cwPayloadSize(cwReq)
-	}
-	if size > limit {
-		return fmt.Errorf("kiro payload is too large after trimming %d history entries: %d bytes exceeds %d bytes", trimmed, size, limit)
-	}
-	if trimmed > 0 {
-		p.logger.Info("trimmed Kiro payload history",
-			zap.Int("trimmed_entries", trimmed),
-			zap.Int("original_payload_bytes", originalSize),
-			zap.Int("payload_bytes", size),
-			zap.Int("trim_target_bytes", trimLimit),
-			zap.Int("max_payload_bytes", limit))
-	}
-	return nil
-}
-
-func payloadTrimLimit(limit int) int {
-	const safetyBytes = 40 * 1024
-	if limit > safetyBytes*2 {
-		return limit - safetyBytes
-	}
-	return limit
-}
-
-func cwPayloadSize(cwReq *models.CWRequest) int {
-	data, err := json.Marshal(cwReq)
-	if err != nil {
-		return 0
-	}
-	return len(data)
 }
 
 func alignHistoryStart(history *[]models.CWHistoryEntry) {

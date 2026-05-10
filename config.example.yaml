@@ -26,8 +26,6 @@ auth:
 defaults:
   health_check_enabled: true
   health_check_seconds: 60
-  max_payload_bytes: 0            # disabled by default for Kiro Bridge parity
-  auto_trim_payload: false        # optional non-bridge guard behavior
 
 tenant:
   db_path: "kiro-gateway.db"

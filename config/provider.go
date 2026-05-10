@@ -36,8 +36,6 @@ type AuthConfig struct {
 type DefaultsConfig struct {
 	HealthCheckEnabled bool `mapstructure:"health_check_enabled"` // whether to run periodic health checks
 	HealthCheckSeconds int  `mapstructure:"health_check_seconds"` // health check interval in seconds (default 60)
-	MaxPayloadBytes    int  `mapstructure:"max_payload_bytes"`    // max serialized Kiro payload size
-	AutoTrimPayload    bool `mapstructure:"auto_trim_payload"`    // drop oldest history when payload exceeds MaxPayloadBytes
 }
 
 // TenantConfig holds multi-tenant settings.
