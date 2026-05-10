@@ -195,7 +195,7 @@ func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
 	}
 
 	for raw := range rawEvents {
-		if c.logger.Core().Enabled(zapcore.DebugLevel) {
+		if c.logger.Core().Enabled(zapcore.DebugLevel) && shouldLogCWEvent(raw.EventType) {
 			payload := logutil.RedactString(string(raw.Payload))
 			payload, truncated := logutil.TruncateString(payload, maxLogBody)
 			payload = logutil.WithTruncationSuffix(payload, truncated, len(raw.Payload), maxLogBody)
@@ -300,7 +300,7 @@ func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
 			// Ignored
 
 		default:
-			c.logger.Debug("unknown cw event", zap.String("type", raw.EventType))
+			// Match bridge behavior: tolerate forward-compatible CW events.
 		}
 	}
 	if activeTool != nil {
@@ -308,6 +308,15 @@ func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
 	}
 
 	out <- CWStreamEvent{Type: "end"}
+}
+
+func shouldLogCWEvent(eventType string) bool {
+	switch eventType {
+	case "assistantResponseEvent", "reasoningContentEvent", "contextUsageEvent", "meteringEvent":
+		return false
+	default:
+		return true
+	}
 }
 
 func (c *CWClient) emitActiveTool(out chan<- CWStreamEvent, activeTool *struct {

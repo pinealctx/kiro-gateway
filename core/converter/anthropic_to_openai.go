@@ -100,8 +100,6 @@ func convertAnthropicMessage(msg models.AnthropicMessage) ([]models.ChatMessage,
 }
 
 func convertUserMessage(msg models.AnthropicMessage) []models.ChatMessage {
-	var msgs []models.ChatMessage
-
 	blocks, ok := models.AnthropicBlocks(msg.Content)
 	if !ok {
 		// Simple string content
@@ -109,6 +107,37 @@ func convertUserMessage(msg models.AnthropicMessage) []models.ChatMessage {
 			Role:    "user",
 			Content: models.RawString(models.ContentText(msg.Content)),
 		}}
+	}
+
+	hasToolResults := false
+	for _, block := range blocks {
+		if block.Type == "tool_result" {
+			hasToolResults = true
+			break
+		}
+	}
+	if hasToolResults {
+		var msgs []models.ChatMessage
+		for _, block := range blocks {
+			switch block.Type {
+			case "text":
+				msgs = append(msgs, models.ChatMessage{
+					Role:    "user",
+					Content: models.RawString(block.Text),
+				})
+			case "tool_result":
+				content := ""
+				if len(block.Content) > 0 {
+					content = models.ContentText(block.Content)
+				}
+				msgs = append(msgs, models.ChatMessage{
+					Role:       "tool",
+					Content:    models.RawString(content),
+					ToolCallID: block.ToolUseID,
+				})
+			}
+		}
+		return msgs
 	}
 
 	var textParts []string
@@ -129,17 +158,6 @@ func convertUserMessage(msg models.AnthropicMessage) []models.ChatMessage {
 					},
 				})
 			}
-		case "tool_result":
-			// Convert to OpenAI tool message
-			content := ""
-			if len(block.Content) > 0 {
-				content = models.ContentText(block.Content)
-			}
-			msgs = append(msgs, models.ChatMessage{
-				Role:       "tool",
-				Content:    models.RawString(content),
-				ToolCallID: block.ToolUseID,
-			})
 		}
 	}
 
@@ -153,18 +171,19 @@ func convertUserMessage(msg models.AnthropicMessage) []models.ChatMessage {
 			})
 		}
 		parts = append(parts, imageParts...)
-		msgs = append([]models.ChatMessage{{
+		return []models.ChatMessage{{
 			Role:    "user",
 			Content: models.MustMarshal(parts),
-		}}, msgs...)
-	} else if len(textParts) > 0 {
-		msgs = append([]models.ChatMessage{{
+		}}
+	}
+	if len(textParts) > 0 {
+		return []models.ChatMessage{{
 			Role:    "user",
 			Content: models.RawString(strings.Join(textParts, "\n")),
-		}}, msgs...)
+		}}
 	}
 
-	return msgs
+	return nil
 }
 
 func convertAssistantMessage(msg models.AnthropicMessage) models.ChatMessage {
@@ -177,6 +196,7 @@ func convertAssistantMessage(msg models.AnthropicMessage) models.ChatMessage {
 	}
 
 	var textParts []string
+	var thinkingParts []string
 	var toolCalls []models.ToolCall
 
 	for _, block := range blocks {
@@ -184,7 +204,7 @@ func convertAssistantMessage(msg models.AnthropicMessage) models.ChatMessage {
 		case "text":
 			textParts = append(textParts, block.Text)
 		case "thinking":
-			// Skip thinking blocks
+			thinkingParts = append(thinkingParts, block.Thinking)
 		case "tool_use":
 			inputJSON, _ := json.Marshal(block.Input)
 			toolCalls = append(toolCalls, models.ToolCall{
@@ -198,9 +218,13 @@ func convertAssistantMessage(msg models.AnthropicMessage) models.ChatMessage {
 		}
 	}
 
+	content := strings.Join(textParts, "\n")
+	if len(thinkingParts) > 0 {
+		content = "<thinking>" + strings.Join(thinkingParts, "") + "</thinking>\n" + content
+	}
 	result := models.ChatMessage{
 		Role:    "assistant",
-		Content: models.RawString(strings.Join(textParts, "\n")),
+		Content: models.RawString(content),
 	}
 	if len(toolCalls) > 0 {
 		result.ToolCalls = toolCalls

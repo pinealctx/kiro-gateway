@@ -153,16 +153,19 @@ func TestOpenAIToCW_DeveloperExtractedAndThinkingHint(t *testing.T) {
 	}
 }
 
-func TestOpenAIToCW_NoNonSystemMessages_Error(t *testing.T) {
+func TestOpenAIToCW_NoNonSystemMessagesDefaultsToHello(t *testing.T) {
 	req := &models.ChatCompletionRequest{
 		Model: "claude-opus-4.6",
 		Messages: []models.ChatMessage{
 			{Role: "system", Content: models.RawString("system only")},
 		},
 	}
-	_, err := OpenAIToCW(req, "")
-	if err == nil {
-		t.Error("expected error for no non-system messages")
+	cw, err := OpenAIToCW(req, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cw.ConversationState.CurrentMessage.UserInputMessage.Content; got != "Hello" {
+		t.Errorf("current content = %q, want Hello", got)
 	}
 }
 
@@ -214,7 +217,7 @@ func TestOpenAIToCW_ToolChoiceNoneDropsTools(t *testing.T) {
 	}
 }
 
-func TestConvertTools_SanitizesUnsupportedSchemaFields(t *testing.T) {
+func TestConvertTools_PreservesSchemaFieldsLikeBridge(t *testing.T) {
 	tools := []models.Tool{
 		{
 			Function: models.ToolFunction{
@@ -242,16 +245,16 @@ func TestConvertTools_SanitizesUnsupportedSchemaFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("schema type = %T, want map[string]any", got[0].ToolSpecification.InputSchema.JSON)
 	}
-	if _, ok := schema["required"]; ok {
-		t.Fatal("empty required should be removed")
+	if _, ok := schema["required"]; !ok {
+		t.Fatal("required should be preserved")
 	}
-	if _, ok := schema["additionalProperties"]; ok {
-		t.Fatal("additionalProperties should be removed")
+	if _, ok := schema["additionalProperties"]; !ok {
+		t.Fatal("additionalProperties should be preserved")
 	}
 	props := schema["properties"].(map[string]any)
 	query := props["query"].(map[string]any)
-	if _, ok := query["additionalProperties"]; ok {
-		t.Fatal("nested additionalProperties should be removed")
+	if _, ok := query["additionalProperties"]; !ok {
+		t.Fatal("nested additionalProperties should be preserved")
 	}
 }
 
@@ -682,6 +685,30 @@ func TestAnthropicToOpenAI_AssistantWithToolCalls(t *testing.T) {
 	}
 }
 
+func TestAnthropicToOpenAI_AssistantThinkingPreservedLikeBridge(t *testing.T) {
+	blocks := models.MustMarshal([]any{
+		map[string]any{"type": "thinking", "thinking": "private chain"},
+		map[string]any{"type": "text", "text": "visible answer"},
+	})
+	req := &models.AnthropicRequest{
+		Model: "claude-opus-4.6",
+		Messages: []models.AnthropicMessage{
+			{Role: "assistant", Content: blocks},
+		},
+	}
+	got, err := AnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content := models.ContentText(got.Messages[0].Content)
+	if !strings.Contains(content, "<thinking>private chain</thinking>") {
+		t.Fatalf("thinking should be preserved in tags, got %q", content)
+	}
+	if !strings.Contains(content, "visible answer") {
+		t.Fatalf("text should be preserved, got %q", content)
+	}
+}
+
 func TestAnthropicToOpenAI_ToolResult(t *testing.T) {
 	// User message with tool_result block
 	resultBlocks := models.MustMarshal([]any{
@@ -711,6 +738,40 @@ func TestAnthropicToOpenAI_ToolResult(t *testing.T) {
 	}
 	if toolMsg.ToolCallID != "tu_1" {
 		t.Errorf("tool_call_id = %q, want tu_1", toolMsg.ToolCallID)
+	}
+}
+
+func TestAnthropicToOpenAI_ToolResultBlockOrderMatchesBridge(t *testing.T) {
+	resultBlocks := models.MustMarshal([]any{
+		map[string]any{"type": "text", "text": "before"},
+		map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": "tu_1",
+			"content":     "tool output",
+		},
+		map[string]any{"type": "text", "text": "after"},
+	})
+	req := &models.AnthropicRequest{
+		Model: "claude-opus-4.6",
+		Messages: []models.AnthropicMessage{
+			{Role: "user", Content: resultBlocks},
+		},
+	}
+	got, err := AnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3", len(got.Messages))
+	}
+	if got.Messages[0].Role != "user" || models.ContentText(got.Messages[0].Content) != "before" {
+		t.Fatalf("first message = %+v", got.Messages[0])
+	}
+	if got.Messages[1].Role != "tool" || got.Messages[1].ToolCallID != "tu_1" {
+		t.Fatalf("second message = %+v", got.Messages[1])
+	}
+	if got.Messages[2].Role != "user" || models.ContentText(got.Messages[2].Content) != "after" {
+		t.Fatalf("third message = %+v", got.Messages[2])
 	}
 }
 

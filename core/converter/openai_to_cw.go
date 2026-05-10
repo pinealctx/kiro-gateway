@@ -115,11 +115,6 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		},
 	})
 
-	// 4. Convert message history (all but the tail)
-	if len(nonSystemMsgs) == 0 {
-		return nil, fmt.Errorf("no non-system messages provided")
-	}
-
 	// Find the tail boundary:
 	// If trailing messages are tool role, they form the current toolResults
 	// Otherwise the last user message is the current message
@@ -143,7 +138,9 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		if len(nonSystemMsgs) > 1 {
 			histMsgs = nonSystemMsgs[:len(nonSystemMsgs)-1]
 		}
-		tailMsgs = nonSystemMsgs[len(nonSystemMsgs)-1:]
+		if len(nonSystemMsgs) > 0 {
+			tailMsgs = nonSystemMsgs[len(nonSystemMsgs)-1:]
+		}
 	}
 
 	// Build paired history: buffer user/tool messages, flush on assistant
@@ -216,6 +213,9 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 			})
 		}
 	}
+	if len(tailMsgs) == 0 {
+		currentContent = "Hello"
+	}
 
 	cwReq := &models.CWRequest{
 		ConversationState: models.CWConversationState{
@@ -265,6 +265,9 @@ func convertTools(tools []models.Tool) []models.CWTool {
 			continue
 		}
 		desc := t.Function.Description
+		if strings.TrimSpace(desc) == "" {
+			continue
+		}
 		if len(desc) > 10000 {
 			desc = desc[:10000]
 		}
@@ -272,7 +275,10 @@ func convertTools(tools []models.Tool) []models.CWTool {
 		if len(t.Function.Parameters) == 0 || string(t.Function.Parameters) == "null" {
 			params = map[string]any{}
 		} else {
-			params = sanitizeJSONSchemaValue(params)
+			var decoded any
+			if err := json.Unmarshal(t.Function.Parameters, &decoded); err == nil {
+				params = decoded
+			}
 		}
 		cwTools = append(cwTools, models.CWTool{
 			ToolSpecification: models.CWToolSpec{
@@ -294,45 +300,6 @@ func toolChoiceIsNone(raw json.RawMessage) bool {
 		return strings.EqualFold(strings.TrimSpace(s), "none")
 	}
 	return false
-}
-
-func sanitizeJSONSchemaValue(v any) any {
-	switch x := v.(type) {
-	case json.RawMessage:
-		var decoded any
-		if err := json.Unmarshal(x, &decoded); err != nil {
-			return x
-		}
-		return sanitizeJSONSchemaValue(decoded)
-	case []byte:
-		var decoded any
-		if err := json.Unmarshal(x, &decoded); err != nil {
-			return x
-		}
-		return sanitizeJSONSchemaValue(decoded)
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, val := range x {
-			if k == "additionalProperties" {
-				continue
-			}
-			if k == "required" {
-				if arr, ok := val.([]any); ok && len(arr) == 0 {
-					continue
-				}
-			}
-			out[k] = sanitizeJSONSchemaValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, val := range x {
-			out[i] = sanitizeJSONSchemaValue(val)
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 // buildHistoryUserEntry groups user and tool messages into a single CW history entry.
