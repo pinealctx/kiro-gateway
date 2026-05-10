@@ -45,14 +45,13 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
-	bootstrapLogger, _ := newJSONLogger("info")
+	bootstrapLogger, _ := newLogger("info", "console")
 	gwCfg, err := config.LoadGatewayConfig(cmd)
 	if err != nil {
 		bootstrapLogger.Fatal("Failed to load config", zap.Error(err))
 	}
 
-	// Setup logger. Always use JSON encoding so every level has one parseable format.
-	logger, err := newJSONLogger(gwCfg.Server.LogLevel)
+	logger, err := newLogger(gwCfg.Server.LogLevel, gwCfg.Server.LogFormat)
 	if err != nil {
 		bootstrapLogger.Fatal("Failed to init logger", zap.Error(err))
 	}
@@ -70,12 +69,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		zap.String("version", version.Get()),
 		zap.String("host", gwCfg.Server.Host),
 		zap.Int("port", gwCfg.Server.Port),
+		zap.String("log_format", gwCfg.Server.LogFormat),
 	)
 	kiro.ConfigureRuntime(kiro.RuntimeConfig{
-		FirstTokenTimeout: time.Duration(gwCfg.Defaults.FirstTokenTimeoutSeconds) * time.Second,
-		FirstTokenRetries: gwCfg.Defaults.FirstTokenMaxRetries,
-		MaxPayloadBytes:   gwCfg.Defaults.MaxPayloadBytes,
-		AutoTrimPayload:   gwCfg.Defaults.AutoTrimPayload,
+		MaxPayloadBytes: gwCfg.Defaults.MaxPayloadBytes,
+		AutoTrimPayload: gwCfg.Defaults.AutoTrimPayload,
 	})
 
 	// Initialize Kiro account registry.
@@ -232,8 +230,22 @@ func createProvider(pc config.ProviderConfig, logger *zap.Logger) (providers.AIP
 	return kiro.NewProvider(name, logger, pc.Region), nil
 }
 
-func newJSONLogger(level string) (*zap.Logger, error) {
+func newLogger(level, format string) (*zap.Logger, error) {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		format = "console"
+	}
+	if format != "console" && format != "json" {
+		return nil, fmt.Errorf("invalid log format %q: must be console or json", format)
+	}
+
 	cfg := zap.NewProductionConfig()
+	cfg.Encoding = format
+	if format == "console" {
+		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeDuration = zapcore.StringDurationEncoder
+	}
 	parsedLevel := zapcore.InfoLevel
 	if strings.TrimSpace(level) != "" {
 		if err := parsedLevel.UnmarshalText([]byte(strings.ToLower(strings.TrimSpace(level)))); err != nil {

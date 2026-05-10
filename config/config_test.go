@@ -18,6 +18,7 @@ server:
   host: "127.0.0.1"
   port: 9090
   log_level: "debug"
+  log_format: "json"
 
 tenant:
   db_path: "test.db"
@@ -39,6 +40,9 @@ tenant:
 	}
 	if gw.Server.Port != 9090 {
 		t.Errorf("port = %d", gw.Server.Port)
+	}
+	if gw.Server.LogFormat != "json" {
+		t.Errorf("log_format = %q", gw.Server.LogFormat)
 	}
 	if gw.Tenant.DBPath != "test.db" {
 		t.Errorf("db_path = %q", gw.Tenant.DBPath)
@@ -67,14 +71,11 @@ func TestLoadFromFile_Defaults(t *testing.T) {
 	if gw.Server.LogLevel != "info" {
 		t.Errorf("default log_level = %q", gw.Server.LogLevel)
 	}
+	if gw.Server.LogFormat != "console" {
+		t.Errorf("default log_format = %q", gw.Server.LogFormat)
+	}
 	if !gw.Auth.AdminLocalOnly {
 		t.Error("default admin_local_only should be true")
-	}
-	if gw.Defaults.FirstTokenTimeoutSeconds != 15 {
-		t.Errorf("default first_token_timeout_seconds = %d", gw.Defaults.FirstTokenTimeoutSeconds)
-	}
-	if gw.Defaults.FirstTokenMaxRetries != 3 {
-		t.Errorf("default first_token_max_retries = %d", gw.Defaults.FirstTokenMaxRetries)
 	}
 	if gw.Defaults.MaxPayloadBytes != 600000 {
 		t.Errorf("default max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
@@ -110,6 +111,7 @@ func TestLoadFromFile_LogLevelNormalized(t *testing.T) {
 	yaml := `
 server:
   log_level: "DEBUG"
+  log_format: "JSON"
 `
 	path := writeTemp(t, "loglevel.yaml", yaml)
 	cmd := newTestCmd()
@@ -124,6 +126,9 @@ server:
 	if gw.Server.LogLevel != "debug" {
 		t.Errorf("log_level = %q, want debug", gw.Server.LogLevel)
 	}
+	if gw.Server.LogFormat != "json" {
+		t.Errorf("log_format = %q, want json", gw.Server.LogFormat)
+	}
 }
 
 // ============================================================
@@ -132,7 +137,7 @@ server:
 
 func TestSynthesizeFromFlags(t *testing.T) {
 	cmd := newTestCmd()
-	cmd.SetArgs([]string{"--port", "7070", "--admin-key", "admin-key"})
+	cmd.SetArgs([]string{"--port", "7070", "--admin-key", "admin-key", "--log-format", "json"})
 	cmd.Execute()
 
 	gw, err := LoadGatewayConfig(cmd)
@@ -146,17 +151,14 @@ func TestSynthesizeFromFlags(t *testing.T) {
 	if gw.Auth.AdminKey != "admin-key" {
 		t.Error("admin key mismatch")
 	}
+	if gw.Server.LogFormat != "json" {
+		t.Errorf("log_format = %q, want json", gw.Server.LogFormat)
+	}
 	if !gw.Auth.AdminLocalOnly {
 		t.Error("admin_local_only should default to true")
 	}
 	if gw.Tenant.DBPath != DefaultDBPath() {
 		t.Errorf("db_path = %q, want %q", gw.Tenant.DBPath, DefaultDBPath())
-	}
-	if gw.Defaults.FirstTokenTimeoutSeconds != 15 {
-		t.Errorf("first_token_timeout_seconds = %d", gw.Defaults.FirstTokenTimeoutSeconds)
-	}
-	if gw.Defaults.FirstTokenMaxRetries != 3 {
-		t.Errorf("first_token_max_retries = %d", gw.Defaults.FirstTokenMaxRetries)
 	}
 	if gw.Defaults.MaxPayloadBytes != 600000 {
 		t.Errorf("max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
@@ -165,7 +167,7 @@ func TestSynthesizeFromFlags(t *testing.T) {
 
 func TestSynthesizeFromFlags_RuntimeOptionsCanDisableGuards(t *testing.T) {
 	cmd := newTestCmd()
-	cmd.SetArgs([]string{"--first-token-timeout=0", "--first-token-max-retries=0", "--max-payload-bytes=0", "--auto-trim-payload"})
+	cmd.SetArgs([]string{"--max-payload-bytes=0", "--auto-trim-payload"})
 	cmd.Execute()
 
 	gw, err := LoadGatewayConfig(cmd)
@@ -173,12 +175,6 @@ func TestSynthesizeFromFlags_RuntimeOptionsCanDisableGuards(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	if gw.Defaults.FirstTokenTimeoutSeconds != 0 {
-		t.Errorf("first_token_timeout_seconds = %d, want 0", gw.Defaults.FirstTokenTimeoutSeconds)
-	}
-	if gw.Defaults.FirstTokenMaxRetries != 0 {
-		t.Errorf("first_token_max_retries = %d, want 0", gw.Defaults.FirstTokenMaxRetries)
-	}
 	if gw.Defaults.MaxPayloadBytes != 0 {
 		t.Errorf("max_payload_bytes = %d, want 0", gw.Defaults.MaxPayloadBytes)
 	}

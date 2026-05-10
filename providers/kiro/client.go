@@ -3,12 +3,16 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/user"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pinealctx/kiro-gateway/core/eventstream"
 	"github.com/pinealctx/kiro-gateway/core/logutil"
 	"github.com/pinealctx/kiro-gateway/models"
@@ -17,8 +21,7 @@ import (
 )
 
 const (
-	cwTarget    = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
-	cwUserAgent = "kiro-cli-chat-macos-aarch64-1.27.2"
+	cwTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 
 	maxRetries = 3
 	maxLogBody = 64 * 1024
@@ -34,9 +37,10 @@ var retryBackoff = []time.Duration{1 * time.Second, 3 * time.Second, 10 * time.S
 
 // CWClient handles HTTP communication with the CodeWhisperer backend.
 type CWClient struct {
-	client    *http.Client
-	logger    *zap.Logger
-	apiRegion string
+	client      *http.Client
+	logger      *zap.Logger
+	apiRegion   string
+	fingerprint string
 }
 
 func NewCWClient(logger *zap.Logger, _ string) *CWClient {
@@ -46,8 +50,9 @@ func NewCWClient(logger *zap.Logger, _ string) *CWClient {
 			// Connect/TLS handshake is bounded by the OS default (~30s).
 			Timeout: 2 * time.Hour,
 		},
-		logger:    logger,
-		apiRegion: kiroAPIRegion,
+		logger:      logger,
+		apiRegion:   kiroAPIRegion,
+		fingerprint: machineFingerprint(),
 	}
 }
 
@@ -97,10 +102,15 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 			return nil, fmt.Errorf("create request: %w", err)
 		}
 
-		req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-amz-target", cwTarget)
 		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-		req.Header.Set("User-Agent", cwUserAgent)
+		req.Header.Set("User-Agent", c.userAgent())
+		req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroIDE-0.7.45-"+c.fingerprint)
+		req.Header.Set("x-amzn-codewhisperer-optout", "true")
+		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+		req.Header.Set("amz-sdk-invocation-id", uuid.NewString())
+		req.Header.Set("amz-sdk-request", fmt.Sprintf("attempt=%d; max=%d", attempt+1, maxRetries+1))
 		if token.IsExternalIdP {
 			req.Header.Set("TokenType", "EXTERNAL_IDP")
 		}
@@ -165,6 +175,10 @@ func (c *CWClient) GenerateStream(ctx context.Context, cwReq *models.CWRequest, 
 
 func (c *CWClient) endpoint(path string) string {
 	return fmt.Sprintf("https://q.%s.amazonaws.com/%s", normalizeRegion(c.apiRegion), path)
+}
+
+func (c *CWClient) userAgent() string {
+	return "aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-" + c.fingerprint
 }
 
 func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
@@ -285,6 +299,44 @@ func (c *CWClient) processStream(body io.ReadCloser, out chan<- CWStreamEvent) {
 			c.logger.Debug("unknown cw event", zap.String("type", raw.EventType))
 		}
 	}
+	if activeTool != nil {
+		c.emitActiveTool(out, activeTool)
+	}
 
 	out <- CWStreamEvent{Type: "end"}
+}
+
+func (c *CWClient) emitActiveTool(out chan<- CWStreamEvent, activeTool *struct {
+	ID       string
+	Name     string
+	InputBuf string
+}) {
+	var input any = map[string]any{}
+	if activeTool.InputBuf != "" {
+		if err := json.Unmarshal([]byte(activeTool.InputBuf), &input); err != nil {
+			c.logger.Warn("failed to parse accumulated tool input JSON, using raw fallback",
+				zap.String("tool", activeTool.Name),
+				zap.Int("buf_len", len(activeTool.InputBuf)),
+				zap.Error(err))
+			input = map[string]any{"raw": activeTool.InputBuf}
+		}
+	}
+	out <- CWStreamEvent{
+		Type: "tool_use",
+		ToolUse: &CWToolUseAccumulator{
+			ToolUseID: activeTool.ID,
+			Name:      activeTool.Name,
+			Input:     input,
+		},
+	}
+}
+
+func machineFingerprint() string {
+	hostname, _ := os.Hostname()
+	username := ""
+	if u, err := user.Current(); err == nil && u != nil {
+		username = u.Username
+	}
+	sum := sha256.Sum256([]byte(hostname + "-" + username + "-kiro-gateway"))
+	return fmt.Sprintf("%x", sum[:])
 }

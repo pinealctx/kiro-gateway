@@ -45,6 +45,7 @@ func ResolveModel(model string) string {
 	if model == "" {
 		return ""
 	}
+	model = strings.TrimSuffix(model, "-thinking")
 	if mapped, ok := kiroModelMap[model]; ok {
 		return mapped
 	}
@@ -86,12 +87,16 @@ func OpenAIToCW(req *models.ChatCompletionRequest, profileArn string) (*models.C
 		}
 	}
 
-	hasTools := len(req.Tools) > 0
+	toolsDisabled := toolChoiceIsNone(req.ToolChoice)
+	hasTools := len(req.Tools) > 0 && !toolsDisabled
 	userSystem := thinking.InjectHint(strings.Join(systemParts, "\n"), thinking.ParseConfig(req.Extras))
 	systemPrompt := sanitizer.BuildSystemPrompt(userSystem, hasTools)
 
 	// 2. Convert tools
-	cwTools := convertTools(req.Tools)
+	var cwTools []models.CWTool
+	if !toolsDisabled {
+		cwTools = convertTools(req.Tools)
+	}
 
 	// 3. Build history: first inject system prompt as a user/assistant pair
 	history := []models.CWHistoryEntry{}
@@ -254,16 +259,21 @@ func convertTools(tools []models.Tool) []models.CWTool {
 		name := t.Function.Name
 		// Filter out web_search / websearch
 		lower := strings.ToLower(name)
-		if lower == "web_search" || lower == "websearch" {
+		if name == "" || lower == "web_search" || lower == "websearch" {
 			continue
 		}
 		desc := t.Function.Description
+		if strings.TrimSpace(desc) == "" {
+			continue
+		}
 		if len(desc) > 10000 {
 			desc = desc[:10000]
 		}
 		var params any = t.Function.Parameters
 		if len(t.Function.Parameters) == 0 || string(t.Function.Parameters) == "null" {
 			params = map[string]any{}
+		} else {
+			params = sanitizeJSONSchemaValue(params)
 		}
 		cwTools = append(cwTools, models.CWTool{
 			ToolSpecification: models.CWToolSpec{
@@ -274,6 +284,56 @@ func convertTools(tools []models.Tool) []models.CWTool {
 		})
 	}
 	return cwTools
+}
+
+func toolChoiceIsNone(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.EqualFold(strings.TrimSpace(s), "none")
+	}
+	return false
+}
+
+func sanitizeJSONSchemaValue(v any) any {
+	switch x := v.(type) {
+	case json.RawMessage:
+		var decoded any
+		if err := json.Unmarshal(x, &decoded); err != nil {
+			return x
+		}
+		return sanitizeJSONSchemaValue(decoded)
+	case []byte:
+		var decoded any
+		if err := json.Unmarshal(x, &decoded); err != nil {
+			return x
+		}
+		return sanitizeJSONSchemaValue(decoded)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if k == "additionalProperties" {
+				continue
+			}
+			if k == "required" {
+				if arr, ok := val.([]any); ok && len(arr) == 0 {
+					continue
+				}
+			}
+			out[k] = sanitizeJSONSchemaValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = sanitizeJSONSchemaValue(val)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // buildHistoryUserEntry groups user and tool messages into a single CW history entry.

@@ -19,6 +19,7 @@ func BindFlags(cmd *cobra.Command) {
 	f.StringP("host", "H", "0.0.0.0", "Listen address (env: HOST)")
 	f.IntP("port", "p", 8080, "Listen port (env: PORT)")
 	f.StringP("log-level", "l", "info", "Log level: debug|info|warn|error (env: LOG_LEVEL)")
+	f.String("log-format", "console", "Log format: console|json (env: LOG_FORMAT)")
 
 	// Auth
 	f.String("admin-key", "", "Admin key for /admin/* endpoints (env: ADMIN_KEY)")
@@ -27,8 +28,6 @@ func BindFlags(cmd *cobra.Command) {
 	// Health check
 	f.Bool("no-health-check", false, "Disable provider health checks (env: NO_HEALTH_CHECK)")
 	f.Int("health-check-interval", 60, "Health check interval in seconds (env: HEALTH_CHECK_INTERVAL)")
-	f.Int("first-token-timeout", 15, "Seconds to wait for the first upstream stream event before retrying (env: FIRST_TOKEN_TIMEOUT)")
-	f.Int("first-token-max-retries", 3, "Maximum retries when the first upstream stream event times out (env: FIRST_TOKEN_MAX_RETRIES)")
 	f.Int("max-payload-bytes", 600000, "Maximum serialized Kiro request payload size; 0 disables the guard (env: MAX_PAYLOAD_BYTES)")
 	f.Bool("auto-trim-payload", false, "Trim oldest conversation history when Kiro payload is too large (env: AUTO_TRIM_PAYLOAD)")
 
@@ -89,6 +88,10 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 		gw.Server.LogLevel, _ = cmd.Flags().GetString("log-level")
 		gw.Server.LogLevel = strings.ToLower(gw.Server.LogLevel)
 	}
+	if cmd.Flags().Changed("log-format") {
+		gw.Server.LogFormat, _ = cmd.Flags().GetString("log-format")
+		gw.Server.LogFormat = strings.ToLower(gw.Server.LogFormat)
+	}
 	if cmd.Flags().Changed("admin-key") {
 		gw.Auth.AdminKey, _ = cmd.Flags().GetString("admin-key")
 	}
@@ -103,12 +106,6 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	}
 	if cmd.Flags().Changed("health-check-interval") {
 		gw.Defaults.HealthCheckSeconds, _ = cmd.Flags().GetInt("health-check-interval")
-	}
-	if cmd.Flags().Changed("first-token-timeout") {
-		gw.Defaults.FirstTokenTimeoutSeconds, _ = cmd.Flags().GetInt("first-token-timeout")
-	}
-	if cmd.Flags().Changed("first-token-max-retries") {
-		gw.Defaults.FirstTokenMaxRetries, _ = cmd.Flags().GetInt("first-token-max-retries")
 	}
 	if cmd.Flags().Changed("max-payload-bytes") {
 		gw.Defaults.MaxPayloadBytes, _ = cmd.Flags().GetInt("max-payload-bytes")
@@ -132,14 +129,13 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	} else {
 		gw.Server.LogLevel = strings.ToLower(gw.Server.LogLevel)
 	}
+	if gw.Server.LogFormat == "" {
+		gw.Server.LogFormat = "console"
+	} else {
+		gw.Server.LogFormat = strings.ToLower(gw.Server.LogFormat)
+	}
 	if gw.Defaults.HealthCheckSeconds == 0 {
 		gw.Defaults.HealthCheckSeconds = 60
-	}
-	if gw.Defaults.FirstTokenTimeoutSeconds == 0 && !v.IsSet("defaults.first_token_timeout_seconds") && !cmd.Flags().Changed("first-token-timeout") {
-		gw.Defaults.FirstTokenTimeoutSeconds = 15
-	}
-	if gw.Defaults.FirstTokenMaxRetries == 0 && !v.IsSet("defaults.first_token_max_retries") && !cmd.Flags().Changed("first-token-max-retries") {
-		gw.Defaults.FirstTokenMaxRetries = 3
 	}
 	if gw.Defaults.MaxPayloadBytes == 0 && !v.IsSet("defaults.max_payload_bytes") && !cmd.Flags().Changed("max-payload-bytes") {
 		gw.Defaults.MaxPayloadBytes = 600000
@@ -157,6 +153,7 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	host := resolveStr(cmd, "host", "HOST")
 	port := resolveInt(cmd, "port", "PORT")
 	logLevel := strings.ToLower(resolveStr(cmd, "log-level", "LOG_LEVEL"))
+	logFormat := strings.ToLower(resolveStr(cmd, "log-format", "LOG_FORMAT"))
 
 	// Auth
 	adminKey := resolveStr(cmd, "admin-key", "ADMIN_KEY")
@@ -165,8 +162,6 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	// Health check
 	noHealthCheck := resolveBool(cmd, "no-health-check", "NO_HEALTH_CHECK")
 	healthCheckInterval := resolveInt(cmd, "health-check-interval", "HEALTH_CHECK_INTERVAL")
-	firstTokenTimeout := resolveInt(cmd, "first-token-timeout", "FIRST_TOKEN_TIMEOUT")
-	firstTokenMaxRetries := resolveInt(cmd, "first-token-max-retries", "FIRST_TOKEN_MAX_RETRIES")
 	maxPayloadBytes := resolveInt(cmd, "max-payload-bytes", "MAX_PAYLOAD_BYTES")
 	autoTrimPayload := resolveBool(cmd, "auto-trim-payload", "AUTO_TRIM_PAYLOAD")
 
@@ -183,6 +178,9 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 	if logLevel == "" {
 		logLevel = "info"
 	}
+	if logFormat == "" {
+		logFormat = "console"
+	}
 	if healthCheckInterval == 0 {
 		healthCheckInterval = 60
 	}
@@ -192,21 +190,20 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 
 	return &GatewayConfig{
 		Server: ServerConfig{
-			Host:     host,
-			Port:     port,
-			LogLevel: logLevel,
+			Host:      host,
+			Port:      port,
+			LogLevel:  logLevel,
+			LogFormat: logFormat,
 		},
 		Auth: AuthConfig{
 			AdminKey:       adminKey,
 			AdminLocalOnly: adminLocalOnly,
 		},
 		Defaults: DefaultsConfig{
-			HealthCheckEnabled:       !noHealthCheck,
-			HealthCheckSeconds:       healthCheckInterval,
-			FirstTokenTimeoutSeconds: firstTokenTimeout,
-			FirstTokenMaxRetries:     firstTokenMaxRetries,
-			MaxPayloadBytes:          maxPayloadBytes,
-			AutoTrimPayload:          autoTrimPayload,
+			HealthCheckEnabled: !noHealthCheck,
+			HealthCheckSeconds: healthCheckInterval,
+			MaxPayloadBytes:    maxPayloadBytes,
+			AutoTrimPayload:    autoTrimPayload,
 		},
 		Tenant: TenantConfig{
 			DBPath: dbPath,

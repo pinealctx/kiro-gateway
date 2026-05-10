@@ -3,7 +3,6 @@ package kiro
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pinealctx/kiro-gateway/models"
 	"go.uber.org/zap"
@@ -13,10 +12,8 @@ func TestApplyPayloadGuardRejectsOversizedPayload(t *testing.T) {
 	restore := runtimeConfig
 	defer func() { runtimeConfig = restore }()
 	ConfigureRuntime(RuntimeConfig{
-		FirstTokenTimeout: time.Second,
-		FirstTokenRetries: 0,
-		MaxPayloadBytes:   200,
-		AutoTrimPayload:   false,
+		MaxPayloadBytes: 200,
+		AutoTrimPayload: false,
 	})
 
 	p := &Provider{logger: zap.NewNop()}
@@ -33,10 +30,8 @@ func TestApplyPayloadGuardTrimsOldestHistory(t *testing.T) {
 	restore := runtimeConfig
 	defer func() { runtimeConfig = restore }()
 	ConfigureRuntime(RuntimeConfig{
-		FirstTokenTimeout: time.Second,
-		FirstTokenRetries: 0,
-		MaxPayloadBytes:   900,
-		AutoTrimPayload:   true,
+		MaxPayloadBytes: 900,
+		AutoTrimPayload: true,
 	})
 
 	cwReq := payloadGuardRequest(8, strings.Repeat("x", 120))

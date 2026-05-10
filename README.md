@@ -101,6 +101,7 @@ server:
   host: "0.0.0.0"
   port: 8080
   log_level: "info"
+  log_format: "console"
   cors_origins: []
 
 auth:
@@ -110,8 +111,6 @@ auth:
 defaults:
   health_check_enabled: true
   health_check_seconds: 60
-  first_token_timeout_seconds: 15
-  first_token_max_retries: 3
   max_payload_bytes: 600000
   auto_trim_payload: false
 
@@ -126,8 +125,7 @@ Important runtime options:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `auth.admin_local_only` | `true` | Keeps `/admin/*` local-only even when public API routes listen on `0.0.0.0` |
-| `first_token_timeout_seconds` | `15` | Retries a stream if upstream sends no first event in this window |
-| `first_token_max_retries` | `3` | Number of first-event timeout retries |
+| `server.log_format` | `console` | Log output format: `console` for readable logs, `json` for structured logs |
 | `max_payload_bytes` | `600000` | Maximum serialized Kiro request size; set `0` to disable |
 | `auto_trim_payload` | `false` | Drops oldest history entries until the payload fits |
 

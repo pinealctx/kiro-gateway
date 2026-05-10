@@ -31,6 +31,7 @@ func TestResolveModel_ExactMatch(t *testing.T) {
 		{"claude-haiku-4-5-latest", "claude-haiku-4.5"},
 		{"claude-3-7-sonnet", "claude-3.7-sonnet"},
 		{"claude-4.5-opus-high", "claude-opus-4.5"},
+		{"claude-opus-4.6-thinking", "claude-opus-4.6"},
 		{"gpt-4o", "gpt-4o"},
 		{"  gpt-4o  ", "gpt-4o"},
 	}
@@ -190,6 +191,67 @@ func TestOpenAIToCW_ToolsConverted(t *testing.T) {
 	}
 	if ctx.Tools[0].ToolSpecification.Name != "get_weather" {
 		t.Errorf("tool name = %q, want get_weather", ctx.Tools[0].ToolSpecification.Name)
+	}
+}
+
+func TestOpenAIToCW_ToolChoiceNoneDropsTools(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-opus-4.6",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: models.RawString("no tools")},
+		},
+		ToolChoice: models.RawString("none"),
+		Tools: []models.Tool{
+			{Type: "function", Function: models.ToolFunction{Name: "get_weather", Description: "Get weather", Parameters: models.MustMarshal(map[string]any{"type": "object"})}},
+		},
+	}
+	cw, err := OpenAIToCW(req, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ctx := cw.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext; ctx != nil && len(ctx.Tools) > 0 {
+		t.Fatalf("expected tool_choice none to omit tools, got %d", len(ctx.Tools))
+	}
+}
+
+func TestConvertTools_SanitizesUnsupportedSchemaFields(t *testing.T) {
+	tools := []models.Tool{
+		{
+			Function: models.ToolFunction{
+				Name:        "search",
+				Description: "Search",
+				Parameters: models.MustMarshal(map[string]any{
+					"type":                 "object",
+					"required":             []any{},
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":                 "string",
+							"additionalProperties": false,
+						},
+					},
+				}),
+			},
+		},
+	}
+	got := convertTools(tools)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(got))
+	}
+	schema, ok := got[0].ToolSpecification.InputSchema.JSON.(map[string]any)
+	if !ok {
+		t.Fatalf("schema type = %T, want map[string]any", got[0].ToolSpecification.InputSchema.JSON)
+	}
+	if _, ok := schema["required"]; ok {
+		t.Fatal("empty required should be removed")
+	}
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatal("additionalProperties should be removed")
+	}
+	props := schema["properties"].(map[string]any)
+	query := props["query"].(map[string]any)
+	if _, ok := query["additionalProperties"]; ok {
+		t.Fatal("nested additionalProperties should be removed")
 	}
 }
 

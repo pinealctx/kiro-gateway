@@ -265,7 +265,7 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 		return err
 	}
 
-	events, err := p.generateStreamWithFirstEventRetry(ctx, cwReq, token)
+	events, err := p.client.GenerateStream(ctx, cwReq, token)
 	if err != nil {
 		stream <- providers.StreamChunk{Error: fmt.Errorf("cw stream error: %w", err)}
 		return err
@@ -367,68 +367,6 @@ func (p *Provider) StreamCompletion(ctx context.Context, req *models.ChatComplet
 	return nil
 }
 
-func (p *Provider) generateStreamWithFirstEventRetry(ctx context.Context, cwReq *models.CWRequest, token *TokenInfo) (<-chan CWStreamEvent, error) {
-	timeout := runtimeConfig.FirstTokenTimeout
-	retries := runtimeConfig.FirstTokenRetries
-	if timeout <= 0 || retries < 0 {
-		return p.client.GenerateStream(ctx, cwReq, token)
-	}
-
-	var lastErr error
-	for attempt := 0; attempt <= retries; attempt++ {
-		if attempt > 0 {
-			delay := retryBackoff[min(attempt-1, len(retryBackoff)-1)]
-			p.logger.Warn("retrying Kiro stream after first event timeout",
-				zap.Int("attempt", attempt),
-				zap.Duration("backoff", delay),
-				zap.Error(lastErr))
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-			}
-		}
-
-		attemptCtx, cancel := context.WithCancel(ctx)
-		events, err := p.client.GenerateStream(attemptCtx, cwReq, token)
-		if err != nil {
-			cancel()
-			lastErr = err
-			continue
-		}
-
-		timer := time.NewTimer(timeout)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			cancel()
-			return nil, ctx.Err()
-		case evt, ok := <-events:
-			timer.Stop()
-			if !ok {
-				cancel()
-				lastErr = fmt.Errorf("upstream stream closed before first event")
-				continue
-			}
-			out := make(chan CWStreamEvent, 32)
-			go func() {
-				defer close(out)
-				defer cancel()
-				out <- evt
-				for next := range events {
-					out <- next
-				}
-			}()
-			return out, nil
-		case <-timer.C:
-			cancel()
-			lastErr = fmt.Errorf("upstream stream produced no first event within %s", timeout)
-			continue
-		}
-	}
-	return nil, fmt.Errorf("first event timeout after %d retries: %w", retries, lastErr)
-}
-
 func (p *Provider) applyPayloadGuard(cwReq *models.CWRequest) error {
 	limit := runtimeConfig.MaxPayloadBytes
 	if limit <= 0 {
@@ -445,8 +383,14 @@ func (p *Provider) applyPayloadGuard(cwReq *models.CWRequest) error {
 	history := &cwReq.ConversationState.History
 	trimmed := 0
 	for size > limit && len(*history) > 2 {
-		*history = append((*history)[:2], (*history)[3:]...)
-		trimmed++
+		remove := 2
+		if len(*history) == 3 {
+			remove = 1
+		}
+		*history = append((*history)[:2], (*history)[2+remove:]...)
+		trimmed += remove
+		alignHistoryStart(history)
+		repairOrphanedToolResults(history)
 		size = cwPayloadSize(cwReq)
 	}
 	if size > limit {
@@ -465,6 +409,54 @@ func cwPayloadSize(cwReq *models.CWRequest) int {
 		return 0
 	}
 	return len(data)
+}
+
+func alignHistoryStart(history *[]models.CWHistoryEntry) {
+	for len(*history) > 0 && (*history)[0].UserInputMessage == nil {
+		*history = (*history)[1:]
+	}
+}
+
+func repairOrphanedToolResults(history *[]models.CWHistoryEntry) {
+	for i := range *history {
+		user := (*history)[i].UserInputMessage
+		if user == nil || user.UserInputMessageContext == nil || len(user.UserInputMessageContext.ToolResults) == 0 {
+			continue
+		}
+		validIDs := map[string]bool{}
+		if i > 0 {
+			if prev := (*history)[i-1].AssistantResponseMessage; prev != nil {
+				for _, tu := range prev.ToolUses {
+					if tu.ToolUseID != "" {
+						validIDs[tu.ToolUseID] = true
+					}
+				}
+			}
+		}
+		kept := user.UserInputMessageContext.ToolResults[:0]
+		var orphaned []string
+		for _, tr := range user.UserInputMessageContext.ToolResults {
+			if validIDs[tr.ToolUseID] {
+				kept = append(kept, tr)
+				continue
+			}
+			for _, part := range tr.Content {
+				if part.Text != "" {
+					orphaned = append(orphaned, part.Text)
+				}
+			}
+		}
+		user.UserInputMessageContext.ToolResults = kept
+		if len(kept) == 0 {
+			user.UserInputMessageContext.ToolResults = nil
+			if len(user.UserInputMessageContext.Tools) == 0 {
+				user.UserInputMessageContext = nil
+			}
+		}
+		if len(orphaned) > 0 {
+			user.Content += "\n[trimmed tool result] " + strings.Join(orphaned, "; ")
+		}
+	}
 }
 
 func (p *Provider) RefreshToken(ctx context.Context) error {
