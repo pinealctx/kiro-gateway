@@ -257,6 +257,19 @@ func (w *AnthropicSSEWriter) WriteMessageStop() error {
 	})
 }
 
+func (w *AnthropicSSEWriter) WriteError(errorType, message string) error {
+	if errorType == "" {
+		errorType = "api_error"
+	}
+	return w.writeTypedEvent("error", map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    errorType,
+			"message": message,
+		},
+	})
+}
+
 func (w *AnthropicSSEWriter) writeTypedEvent(eventType string, data any) error {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -865,6 +866,33 @@ func TestAnthropic_Messages_StreamLengthStopReason(t *testing.T) {
 	}
 	if body := w.Body.String(); !strings.Contains(body, `"stop_reason":"max_tokens"`) {
 		t.Fatalf("expected max_tokens stop reason, got:\n%s", body)
+	}
+}
+
+func TestAnthropic_Messages_StreamErrorUsesAnthropicErrorEvent(t *testing.T) {
+	mock := &mockProvider{
+		name: "kiro",
+		chunks: []providers.StreamChunk{
+			{Error: errors.New("cw returned 429")},
+		},
+	}
+	router := setupRouter(mock, "")
+
+	w := doJSON(router, "POST", "/a/kiro/v1/messages", map[string]any{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 1024,
+		"stream":     true,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+	}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"api_error"`) {
+		t.Fatalf("expected Anthropic error event, got:\n%s", body)
+	}
+	if strings.Contains(body, "[Error:") {
+		t.Fatalf("error should not be emitted as assistant text, got:\n%s", body)
 	}
 }
 

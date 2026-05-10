@@ -188,6 +188,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 	hasToolUse := false
 	emittedMeaningfulText := false
 	outputTruncated := false
+	streamFailed := false
 	continueCount := 0
 	toolBlockOpen := false // track whether a tool_use content block is open
 
@@ -235,11 +236,10 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 					zap.String("upstream_model", req.Model),
 					zap.String("provider", provider.Name()),
 				)
-				if !textStarted {
-					_ = writer.WriteContentBlockStart()
-					textStarted = true
+				if err := writer.WriteError("api_error", chunk.Error.Error()); err != nil {
+					return
 				}
-				_ = writer.WriteContentDelta("\n\n[Error: " + chunk.Error.Error() + "]")
+				streamFailed = true
 				break
 			}
 
@@ -357,6 +357,10 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 		if toolBlockOpen {
 			_ = writer.WriteContentBlockStop()
 			toolBlockOpen = false
+		}
+
+		if streamFailed {
+			break
 		}
 
 		if truncated && !hasToolUse && continueCount < continuation.MaxContinuations && continuation.ShouldAutoContinue(fullOutput, req.Messages) {
