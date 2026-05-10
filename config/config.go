@@ -28,8 +28,8 @@ func BindFlags(cmd *cobra.Command) {
 	// Health check
 	f.Bool("no-health-check", false, "Disable provider health checks (env: NO_HEALTH_CHECK)")
 	f.Int("health-check-interval", 60, "Health check interval in seconds (env: HEALTH_CHECK_INTERVAL)")
-	f.Int("max-payload-bytes", 600000, "Maximum serialized Kiro request payload size; 0 disables the guard (env: MAX_PAYLOAD_BYTES)")
-	f.Bool("auto-trim-payload", true, "Trim oldest conversation history when Kiro payload is too large (env: AUTO_TRIM_PAYLOAD)")
+	f.Int("max-payload-bytes", 0, "Maximum serialized Kiro request payload size; 0 disables the guard (env: MAX_PAYLOAD_BYTES)")
+	f.Bool("auto-trim-payload", false, "Trim oldest conversation history when Kiro payload is too large (env: AUTO_TRIM_PAYLOAD)")
 
 	// Tenant
 	f.String("db-path", DefaultDBPath(), "SQLite database path (env: DB_PATH)")
@@ -136,12 +136,6 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	}
 	if gw.Defaults.HealthCheckSeconds == 0 {
 		gw.Defaults.HealthCheckSeconds = 60
-	}
-	if gw.Defaults.MaxPayloadBytes == 0 && !v.IsSet("defaults.max_payload_bytes") && !cmd.Flags().Changed("max-payload-bytes") {
-		gw.Defaults.MaxPayloadBytes = 600000
-	}
-	if !v.IsSet("defaults.auto_trim_payload") && !cmd.Flags().Changed("auto-trim-payload") {
-		gw.Defaults.AutoTrimPayload = true
 	}
 	if gw.Tenant.DBPath == "" {
 		gw.Tenant.DBPath = DefaultDBPath()

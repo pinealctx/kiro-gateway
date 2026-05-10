@@ -77,11 +77,11 @@ func TestLoadFromFile_Defaults(t *testing.T) {
 	if !gw.Auth.AdminLocalOnly {
 		t.Error("default admin_local_only should be true")
 	}
-	if gw.Defaults.MaxPayloadBytes != 600000 {
+	if gw.Defaults.MaxPayloadBytes != 0 {
 		t.Errorf("default max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
 	}
-	if !gw.Defaults.AutoTrimPayload {
-		t.Error("default auto_trim_payload should be true")
+	if gw.Defaults.AutoTrimPayload {
+		t.Error("default auto_trim_payload should be false")
 	}
 }
 
@@ -163,11 +163,11 @@ func TestSynthesizeFromFlags(t *testing.T) {
 	if gw.Tenant.DBPath != DefaultDBPath() {
 		t.Errorf("db_path = %q, want %q", gw.Tenant.DBPath, DefaultDBPath())
 	}
-	if gw.Defaults.MaxPayloadBytes != 600000 {
+	if gw.Defaults.MaxPayloadBytes != 0 {
 		t.Errorf("max_payload_bytes = %d", gw.Defaults.MaxPayloadBytes)
 	}
-	if !gw.Defaults.AutoTrimPayload {
-		t.Error("auto_trim_payload should default to true")
+	if gw.Defaults.AutoTrimPayload {
+		t.Error("auto_trim_payload should default to false")
 	}
 }
 

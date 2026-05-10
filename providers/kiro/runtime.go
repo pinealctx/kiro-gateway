@@ -6,8 +6,8 @@ type RuntimeConfig struct {
 }
 
 var runtimeConfig = RuntimeConfig{
-	MaxPayloadBytes: 600000,
-	AutoTrimPayload: true,
+	MaxPayloadBytes: 0,
+	AutoTrimPayload: false,
 }
 
 func ConfigureRuntime(cfg RuntimeConfig) {
