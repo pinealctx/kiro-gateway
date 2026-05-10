@@ -180,11 +180,14 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 	}
 
 	var fullOutput string
+	var thinkingOutput string
 	textStarted := false
 	textClosed := false
 	thinkingStarted := false
 	thinkingClosed := false
 	hasToolUse := false
+	emittedMeaningfulText := false
+	outputTruncated := false
 	continueCount := 0
 	toolBlockOpen := false // track whether a tool_use content block is open
 
@@ -260,6 +263,9 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 					textStarted = true
 				}
 				fullOutput += chunk.Content
+				if strings.TrimSpace(chunk.Content) != "" {
+					emittedMeaningfulText = true
+				}
 				if err := writer.WriteContentDelta(chunk.Content); err != nil {
 					return
 				}
@@ -284,6 +290,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 					thinkingStarted = true
 				}
 				fullOutput += chunk.ReasoningContent
+				thinkingOutput += chunk.ReasoningContent
 				if err := writer.WriteThinkingDelta(chunk.ReasoningContent); err != nil {
 					return
 				}
@@ -358,8 +365,31 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 			req.Messages = continuation.BuildContinuationMessages(req.Messages, fullOutput)
 			continue
 		}
+		outputTruncated = truncated
 
 		break
+	}
+
+	// Match Kiro Bridge behavior for thinking-only streams. Anthropic clients
+	// expect a visible content block when no tool call is emitted.
+	if thinkingOutput != "" && !emittedMeaningfulText && !hasToolUse {
+		if thinkingStarted && !thinkingClosed {
+			if err := writer.WriteContentBlockStop(); err != nil {
+				return
+			}
+			thinkingStarted = false
+			thinkingClosed = false
+		}
+		if !textStarted {
+			if err := writer.WriteContentBlockStart(); err != nil {
+				return
+			}
+			textStarted = true
+		}
+		if err := writer.WriteContentDelta(" "); err != nil {
+			return
+		}
+		outputTruncated = true
 	}
 
 	// Close text block if still open
@@ -373,6 +403,10 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 	stopReason := "end_turn"
 	if hasToolUse {
 		stopReason = "tool_use"
+	} else if outputTruncated {
+		stopReason = "max_tokens"
+	} else if thinkingOutput != "" && !emittedMeaningfulText {
+		stopReason = "max_tokens"
 	}
 	outputTokens := len(fullOutput) / 4
 	recordUsage(h.store, c, req.Model, provider.Name(), inputTokens, outputTokens, start)
