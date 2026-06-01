@@ -225,8 +225,8 @@ func (h *KiroAdminHandler) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, provider.TokenStatus())
 }
 
-// GetUsageLimits shows the current Kiro subscription and quota limits.
-// GET /admin/kiro/usage-limits?provider=<name>
+// GetUsageLimits shows cached Kiro subscription and quota limits.
+// GET /admin/kiro/usage-limits?provider=<name>&refresh=true
 func (h *KiroAdminHandler) GetUsageLimits(c *gin.Context) {
 	providerName := c.Query("provider")
 	provider := h.findKiroProvider(providerName)
@@ -235,7 +235,15 @@ func (h *KiroAdminHandler) GetUsageLimits(c *gin.Context) {
 		return
 	}
 
-	limits, err := provider.GetUsageLimits(c.Request.Context())
+	var (
+		limits *kiroProvider.UsageLimits
+		err    error
+	)
+	if strings.EqualFold(c.Query("refresh"), "true") || c.Query("refresh") == "1" {
+		limits, err = provider.RefreshUsageLimits(c.Request.Context())
+	} else {
+		limits, err = provider.GetCachedOrRefreshUsageLimits(c.Request.Context())
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

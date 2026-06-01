@@ -322,14 +322,15 @@ func (h *AdminHandler) ListProviders(c *gin.Context) {
 	records := h.store.ListProviderRecords()
 
 	type providerInfo struct {
-		ID        string         `json:"id"`
-		Name      string         `json:"name"`
-		Type      string         `json:"type"`
-		Region    string         `json:"region"`
-		Enabled   bool           `json:"enabled"`
-		Healthy   bool           `json:"healthy"`
-		CreatedAt string         `json:"created_at"`
-		TokenInfo map[string]any `json:"token_info,omitempty"`
+		ID          string            `json:"id"`
+		Name        string            `json:"name"`
+		Type        string            `json:"type"`
+		Region      string            `json:"region"`
+		Enabled     bool              `json:"enabled"`
+		Healthy     bool              `json:"healthy"`
+		CreatedAt   string            `json:"created_at"`
+		TokenInfo   map[string]any    `json:"token_info,omitempty"`
+		UsageLimits *kiro.UsageLimits `json:"usage_limits,omitempty"`
 	}
 
 	// Collect live providers for token info lookup
@@ -351,6 +352,11 @@ func (h *AdminHandler) ListProviders(c *gin.Context) {
 			if tip, ok := p.(providers.TokenInfoProvider); ok {
 				info.TokenInfo = tip.GetTokenInfo()
 			}
+			if kp, ok := p.(*kiro.Provider); ok {
+				if limits, ok := kp.GetCachedUsageLimits(); ok {
+					info.UsageLimits = limits
+				}
+			}
 		}
 		result = append(result, info)
 	}
@@ -368,6 +374,11 @@ func (h *AdminHandler) ListProviders(c *gin.Context) {
 			}
 			if tip, ok := p.(providers.TokenInfoProvider); ok {
 				info.TokenInfo = tip.GetTokenInfo()
+			}
+			if kp, ok := p.(*kiro.Provider); ok {
+				if limits, ok := kp.GetCachedUsageLimits(); ok {
+					info.UsageLimits = limits
+				}
 			}
 			result = append(result, info)
 		}
@@ -463,14 +474,16 @@ func (h *AdminHandler) UpdateProvider(c *gin.Context) {
 
 	// Migrate Kiro token KV data if provider name changed
 	if rec.Name != oldName {
-		oldKVKey := "kiro:" + oldName + ":token"
-		newKVKey := "kiro:" + rec.Name + ":token"
-		if data, ok := h.store.GetKV(oldKVKey); ok {
-			if err := h.store.SetKV(newKVKey, data); err == nil {
-				_ = h.store.DeleteKV(oldKVKey)
-				h.logger.Info("Migrated Kiro token KV data",
-					zap.String("old_key", oldKVKey),
-					zap.String("new_key", newKVKey))
+		for _, suffix := range []string{"token", "usage_limits"} {
+			oldKVKey := "kiro:" + oldName + ":" + suffix
+			newKVKey := "kiro:" + rec.Name + ":" + suffix
+			if data, ok := h.store.GetKV(oldKVKey); ok {
+				if err := h.store.SetKV(newKVKey, data); err == nil {
+					_ = h.store.DeleteKV(oldKVKey)
+					h.logger.Info("Migrated Kiro KV data",
+						zap.String("old_key", oldKVKey),
+						zap.String("new_key", newKVKey))
+				}
 			}
 		}
 	}
@@ -508,10 +521,12 @@ func (h *AdminHandler) DeleteProvider(c *gin.Context) {
 		return
 	}
 
-	// Clean up associated token/auth data from kv_store
-	kvKey := "kiro:" + rec.Name + ":token"
-	if err := h.store.DeleteKV(kvKey); err != nil {
-		h.logger.Warn("Failed to clean up Kiro token data", zap.String("key", kvKey), zap.Error(err))
+	// Clean up associated token/auth/cache data from kv_store
+	for _, suffix := range []string{"token", "usage_limits"} {
+		kvKey := "kiro:" + rec.Name + ":" + suffix
+		if err := h.store.DeleteKV(kvKey); err != nil {
+			h.logger.Warn("Failed to clean up Kiro KV data", zap.String("key", kvKey), zap.Error(err))
+		}
 	}
 
 	h.logger.Info("Provider deleted via admin API", zap.String("name", rec.Name))

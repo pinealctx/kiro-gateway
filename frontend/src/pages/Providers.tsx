@@ -121,17 +121,28 @@ export default function ProvidersPage() {
     setKiroModalOpen(true);
   };
 
-  const openQuota = async (record: ProviderRecord) => {
-    setSelectedProvider(record);
-    setQuota(null);
-    setQuotaOpen(true);
+  const loadQuota = async (record: ProviderRecord, refresh = false) => {
     setQuotaLoading(true);
     try {
-      setQuota(await getKiroUsageLimits(record.name));
+      const nextQuota = await getKiroUsageLimits(record.name, refresh);
+      setQuota(nextQuota);
+      if (refresh) {
+        message.success(t.providers.quotaRefreshSuccess);
+        fetchData();
+      }
     } catch (err) {
       message.error(err instanceof Error ? err.message : t.providers.quotaLoadError);
     } finally {
       setQuotaLoading(false);
+    }
+  };
+
+  const openQuota = async (record: ProviderRecord) => {
+    setSelectedProvider(record);
+    setQuota(record.usage_limits ?? null);
+    setQuotaOpen(true);
+    if (!record.usage_limits) {
+      await loadQuota(record);
     }
   };
 
@@ -248,6 +259,34 @@ export default function ProvidersPage() {
         ),
     },
     {
+      title: t.providers.recentQuota,
+      dataIndex: "usage_limits",
+      width: 220,
+      render: (quota?: KiroUsageLimits) =>
+        quota ? (
+          <div className="min-w-[180px]">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <Text className="text-xs">
+                {formatNumber(quota.usage.used_precise || quota.usage.used)} / {formatNumber(quota.usage.limit_precise || quota.usage.limit)}
+              </Text>
+              <Text type="secondary" className="text-xs">
+                {formatPercent(quota.usage.percent_used)}%
+              </Text>
+            </div>
+            <Progress
+              percent={Math.min(100, quota.usage.percent_used || 0)}
+              size="small"
+              showInfo={false}
+            />
+            <Text type="secondary" className="text-xs">
+              {quota.fetched_at ? new Date(quota.fetched_at).toLocaleString() : "-"}
+            </Text>
+          </div>
+        ) : (
+          <Text type="secondary" className="text-xs">{t.providers.quotaNoData}</Text>
+        ),
+    },
+    {
       title: t.common.actions,
       fixed: "right",
       width: 250,
@@ -329,7 +368,7 @@ export default function ProvidersPage() {
           loading={loading}
           pagination={false}
           size="middle"
-          scroll={{ x: 820 }}
+          scroll={{ x: 1040 }}
           locale={{
             emptyText: (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t.empty.noProviders}>
@@ -402,7 +441,18 @@ export default function ProvidersPage() {
           setQuotaOpen(false);
           setQuota(null);
         }}
-        footer={null}
+        footer={
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={quotaLoading}
+              onClick={() => selectedProvider && loadQuota(selectedProvider, true)}
+            >
+              {t.providers.quotaRefreshLatest}
+            </Button>
+            <Button onClick={() => setQuotaOpen(false)}>{t.common.close}</Button>
+          </Space>
+        }
         width={620}
         destroyOnClose
       >

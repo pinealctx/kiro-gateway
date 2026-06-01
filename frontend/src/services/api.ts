@@ -58,6 +58,7 @@ export interface ProviderRecord {
   region: string;
   enabled: boolean;
   healthy?: boolean;
+  usage_limits?: KiroUsageLimits;
   created_at?: string;
 }
 
@@ -121,9 +122,12 @@ export const updateProvider = (id: string, data: Partial<ProviderRecord>) =>
 export const deleteProvider = (id: string) =>
   request<{ deleted: boolean }>("DELETE", `/admin/accounts/${id}`);
 
-export const getKiroUsageLimits = (provider?: string) => {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<KiroUsageLimits>("GET", `/admin/kiro/usage-limits${qs}`);
+export const getKiroUsageLimits = (provider?: string, refresh?: boolean) => {
+  const qs = new URLSearchParams();
+  if (provider) qs.set("provider", provider);
+  if (refresh) qs.set("refresh", "true");
+  const query = qs.toString();
+  return request<KiroUsageLimits>("GET", `/admin/kiro/usage-limits${query ? `?${query}` : ""}`);
 };
 
 export interface KiroModelsResponse {

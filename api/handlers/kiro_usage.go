@@ -48,7 +48,7 @@ func (h *KiroUsageHandler) GetUsageLimits(c *gin.Context) {
 		return
 	}
 
-	limits, err := provider.GetUsageLimits(c.Request.Context())
+	limits, err := provider.GetCachedOrRefreshUsageLimits(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,8 @@ type Provider struct {
 	region     string
 	kvStore    KVStore
 	stopCh     chan struct{}
+	usageMu    sync.RWMutex
+	usageCache *UsageLimits
 }
 
 // NewProvider creates a Kiro provider using the built-in PKCE login flow.
@@ -60,6 +63,7 @@ func NewProvider(name string, logger *zap.Logger, region ...string) *Provider {
 	})
 
 	tm.StartBackgroundRefreshWithStop(2*time.Minute, p.stopCh)
+	p.StartUsageLimitsRefresh(10 * time.Minute)
 
 	return p
 }
@@ -67,6 +71,11 @@ func NewProvider(name string, logger *zap.Logger, region ...string) *Provider {
 // kvKeyToken returns the provider-specific key for token persistence.
 func (p *Provider) kvKeyToken() string {
 	return "kiro:" + p.name + ":token"
+}
+
+// kvKeyUsageLimits returns the provider-specific key for cached usage limits.
+func (p *Provider) kvKeyUsageLimits() string {
+	return "kiro:" + p.name + ":usage_limits"
 }
 
 // AuthMgr returns the Kiro auth manager for PKCE login management.
@@ -77,6 +86,7 @@ func (p *Provider) AuthMgr() *KiroAuthManager {
 // SetStore injects a KV store for token persistence.
 func (p *Provider) SetStore(store KVStore) {
 	p.kvStore = store
+	_ = p.RestoreUsageLimits()
 }
 
 // SetLoginToken injects a token from the built-in PKCE login.
@@ -84,6 +94,7 @@ func (p *Provider) SetLoginToken(lt *LoginToken) {
 	p.tokenMgr.SetLoginToken(lt)
 	p.profileArn = lt.ProfileArn
 	p.persistToken(lt)
+	go p.refreshUsageLimitsSoon()
 }
 
 // persistedToken is the JSON-serializable form stored in the DB.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 const (
@@ -111,11 +112,152 @@ type usageUserInfo struct {
 
 // GetUsageLimits fetches the current Kiro subscription and quota limits.
 func (p *Provider) GetUsageLimits(ctx context.Context) (*UsageLimits, error) {
+	return p.RefreshUsageLimits(ctx)
+}
+
+// GetCachedUsageLimits returns the latest successful usage response, if one is cached.
+func (p *Provider) GetCachedUsageLimits() (*UsageLimits, bool) {
+	p.usageMu.RLock()
+	defer p.usageMu.RUnlock()
+	if p.usageCache == nil {
+		return nil, false
+	}
+	return cloneUsageLimits(p.usageCache), true
+}
+
+// GetCachedOrRefreshUsageLimits returns cached usage data, fetching it if no cache exists yet.
+func (p *Provider) GetCachedOrRefreshUsageLimits(ctx context.Context) (*UsageLimits, error) {
+	if limits, ok := p.GetCachedUsageLimits(); ok {
+		return limits, nil
+	}
+	return p.RefreshUsageLimits(ctx)
+}
+
+// RefreshUsageLimits fetches fresh usage data and stores the last successful response.
+func (p *Provider) RefreshUsageLimits(ctx context.Context) (*UsageLimits, error) {
 	token, err := p.tokenMgr.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("token error: %w", err)
 	}
-	return p.client.GetUsageLimits(ctx, p.name, p.profileArn, token)
+	limits, err := p.client.GetUsageLimits(ctx, p.name, p.profileArn, token)
+	if err != nil {
+		return nil, err
+	}
+	p.setCachedUsageLimits(limits)
+	return cloneUsageLimits(limits), nil
+}
+
+// RestoreUsageLimits loads a previously cached successful usage response from the KV store.
+func (p *Provider) RestoreUsageLimits() bool {
+	if p.kvStore == nil {
+		return false
+	}
+	data, ok := p.kvStore.GetKV(p.kvKeyUsageLimits())
+	if !ok || strings.TrimSpace(data) == "" {
+		return false
+	}
+	var limits UsageLimits
+	if err := json.Unmarshal([]byte(data), &limits); err != nil {
+		p.logger.Warn("failed to unmarshal cached kiro usage limits", zap.Error(err))
+		return false
+	}
+	limits.Account = p.name
+	p.usageMu.Lock()
+	p.usageCache = cloneUsageLimits(&limits)
+	p.usageMu.Unlock()
+	return true
+}
+
+// StartUsageLimitsRefresh starts a background job that periodically refreshes usage limits.
+func (p *Provider) StartUsageLimitsRefresh(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		initialDelay := 10 * time.Second
+		timer := time.NewTimer(initialDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			p.refreshUsageLimitsWithTimeout()
+		case <-p.stopCh:
+			return
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				p.refreshUsageLimitsWithTimeout()
+			case <-p.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (p *Provider) refreshUsageLimitsSoon() {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		p.refreshUsageLimitsWithTimeout()
+	case <-p.stopCh:
+	}
+}
+
+func (p *Provider) refreshUsageLimitsWithTimeout() {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if _, err := p.RefreshUsageLimits(ctx); err != nil {
+		p.logger.Debug("failed to refresh cached kiro usage limits", zap.Error(err))
+	}
+}
+
+func (p *Provider) setCachedUsageLimits(limits *UsageLimits) {
+	if limits == nil {
+		return
+	}
+	cached := cloneUsageLimits(limits)
+	if cached == nil {
+		return
+	}
+	cached.Account = p.name
+	p.usageMu.Lock()
+	p.usageCache = cached
+	p.usageMu.Unlock()
+	p.persistUsageLimits(cached)
+}
+
+func (p *Provider) persistUsageLimits(limits *UsageLimits) {
+	if p.kvStore == nil || limits == nil {
+		return
+	}
+	data, err := json.Marshal(limits)
+	if err != nil {
+		p.logger.Error("failed to marshal kiro usage limits for persistence", zap.Error(err))
+		return
+	}
+	if err := p.kvStore.SetKV(p.kvKeyUsageLimits(), string(data)); err != nil {
+		p.logger.Error("failed to persist kiro usage limits", zap.Error(err))
+	}
+}
+
+func cloneUsageLimits(limits *UsageLimits) *UsageLimits {
+	if limits == nil {
+		return nil
+	}
+	clone := *limits
+	if limits.DaysUntilReset != nil {
+		v := *limits.DaysUntilReset
+		clone.DaysUntilReset = &v
+	}
+	if limits.NextDateReset != nil {
+		v := *limits.NextDateReset
+		clone.NextDateReset = &v
+	}
+	return &clone
 }
 
 // ListModels fetches models available to this Kiro account.
