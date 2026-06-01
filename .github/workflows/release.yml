@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for a manual build check; no GitHub Release is created."
+        required: true
+        default: "manual-check"
 
 permissions:
   contents: write
@@ -14,17 +20,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11.5.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Build frontend assets
         working-directory: frontend
@@ -33,17 +41,19 @@ jobs:
           pnpm build
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build binaries from tag
+      - name: Build binaries
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
         run: |
           set -euo pipefail
 
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${RELEASE_VERSION}"
           LDFLAGS="-s -w -X github.com/pinealctx/kiro-gateway/version.Version=${VERSION}"
 
           mkdir -p dist
@@ -86,7 +96,8 @@ jobs:
           done
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
