@@ -64,6 +64,7 @@ func (s *Store) migrate() error {
 		enabled     INTEGER NOT NULL DEFAULT 1,
 		kiro_accounts     TEXT NOT NULL DEFAULT '[]',
 		kiro_default_account TEXT NOT NULL DEFAULT '',
+		suppress_reasoning INTEGER NOT NULL DEFAULT 0,
 		metadata    TEXT NOT NULL DEFAULT '{}',
 		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +109,9 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec("ALTER TABLE api_keys ADD COLUMN kiro_default_account TEXT NOT NULL DEFAULT ''"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate tenant db: %w", err)
 	}
+	if _, err := s.db.Exec("ALTER TABLE api_keys ADD COLUMN suppress_reasoning INTEGER NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return fmt.Errorf("migrate tenant db: %w", err)
+	}
 	if _, err := s.db.Exec("ALTER TABLE providers ADD COLUMN region TEXT NOT NULL DEFAULT 'us-east-1'"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return fmt.Errorf("migrate tenant db: %w", err)
 	}
@@ -118,7 +122,7 @@ func (s *Store) loadCache() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query("SELECT id, key, name, enabled, kiro_accounts, kiro_default_account, metadata, created_at, updated_at FROM api_keys")
+	rows, err := s.db.Query("SELECT id, key, name, enabled, kiro_accounts, kiro_default_account, suppress_reasoning, metadata, created_at, updated_at FROM api_keys")
 	if err != nil {
 		return err
 	}
@@ -138,12 +142,13 @@ func (s *Store) loadCache() error {
 func scanKey(rows *sql.Rows) (*APIKey, error) {
 	var k APIKey
 	var accountsJSON, metaJSON string
-	var enabled int
-	err := rows.Scan(&k.ID, &k.Key, &k.Name, &enabled, &accountsJSON, &k.KiroDefaultAccount, &metaJSON, &k.CreatedAt, &k.UpdatedAt)
+	var enabled, suppressReasoning int
+	err := rows.Scan(&k.ID, &k.Key, &k.Name, &enabled, &accountsJSON, &k.KiroDefaultAccount, &suppressReasoning, &metaJSON, &k.CreatedAt, &k.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	k.Enabled = enabled == 1
+	k.SuppressReasoning = suppressReasoning == 1
 	_ = json.Unmarshal([]byte(accountsJSON), &k.KiroAccounts)
 	_ = json.Unmarshal([]byte(metaJSON), &k.Metadata)
 	if k.KiroAccounts == nil {
@@ -205,10 +210,10 @@ func (s *Store) CreateKey(name string, opts ...KeyOption) (*APIKey, error) {
 	metaJSON, _ := json.Marshal(k.Metadata)
 
 	_, err := s.db.Exec(
-		`INSERT INTO api_keys (id, key, name, enabled, kiro_accounts, kiro_default_account, metadata, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO api_keys (id, key, name, enabled, kiro_accounts, kiro_default_account, suppress_reasoning, metadata, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		k.ID, k.Key, k.Name, boolToInt(k.Enabled),
-		string(accountsJSON), k.KiroDefaultAccount, string(metaJSON),
+		string(accountsJSON), k.KiroDefaultAccount, boolToInt(k.SuppressReasoning), string(metaJSON),
 		k.CreatedAt, k.UpdatedAt,
 	)
 	if err != nil {
@@ -290,9 +295,9 @@ func (s *Store) UpdateKey(id string, opts ...KeyOption) (*APIKey, error) {
 	metaJSON, _ := json.Marshal(updated.Metadata)
 
 	_, err := s.db.Exec(
-		`UPDATE api_keys SET name=?, enabled=?, kiro_accounts=?, kiro_default_account=?, metadata=?, updated_at=? WHERE id=?`,
+		`UPDATE api_keys SET name=?, enabled=?, kiro_accounts=?, kiro_default_account=?, suppress_reasoning=?, metadata=?, updated_at=? WHERE id=?`,
 		updated.Name, boolToInt(updated.Enabled),
-		string(accountsJSON), updated.KiroDefaultAccount, string(metaJSON),
+		string(accountsJSON), updated.KiroDefaultAccount, boolToInt(updated.SuppressReasoning), string(metaJSON),
 		updated.UpdatedAt, updated.ID,
 	)
 	if err != nil {
@@ -439,6 +444,10 @@ func WithKiroAccounts(accounts []string) KeyOption {
 
 func WithKiroDefaultAccount(account string) KeyOption {
 	return func(k *APIKey) { k.KiroDefaultAccount = strings.TrimSpace(account) }
+}
+
+func WithSuppressReasoning(suppress bool) KeyOption {
+	return func(k *APIKey) { k.SuppressReasoning = suppress }
 }
 
 func normalizeStringList(values []string) []string {

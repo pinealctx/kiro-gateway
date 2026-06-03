@@ -143,6 +143,8 @@ export default {
     fieldKiroAccountsPlaceholder: "Select accounts this key can use",
     fieldKiroDefaultAccount: "Default Account",
     fieldKiroDefaultAccountPlaceholder: "Used when the URL does not select an account",
+    fieldSuppressReasoning: "Hide Thinking",
+    fieldSuppressReasoningTooltip: "Drop the model's reasoning/thinking content from responses. Saves tokens and avoids cluttering clients like Claude Code that re-summarize it.",
     defaultAccountTag: "default",
     usage: "Usage",
     keyPrefix: "Key Prefix",

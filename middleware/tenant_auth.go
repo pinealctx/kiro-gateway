@@ -76,6 +76,21 @@ func GetTenantID(c *gin.Context) string {
 	return id.(string)
 }
 
+// SuppressReasoning reports whether the authenticated API key is configured to
+// drop upstream reasoning/thinking content from responses. Returns false when
+// there is no tenant auth context.
+func SuppressReasoning(c *gin.Context) bool {
+	keyVal, exists := c.Get(CtxKeyAPIKey)
+	if !exists {
+		return false
+	}
+	key, ok := keyVal.(*tenant.APIKey)
+	if !ok {
+		return false
+	}
+	return key.SuppressReasoning
+}
+
 // ResolveKiroAccount verifies the URL-selected account against the API key's
 // allowed Kiro account list.
 func ResolveKiroAccount(c *gin.Context, requestedAccount string) (string, bool) {

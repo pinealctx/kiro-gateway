@@ -99,7 +99,7 @@ export default function KeysPage() {
     setEditing(null);
     setNewKeyValue("");
     form.resetFields();
-    form.setFieldsValue({ enabled: true });
+    form.setFieldsValue({ enabled: true, suppress_reasoning: false });
     setModalOpen(true);
   };
 
@@ -224,6 +224,13 @@ export default function KeysPage() {
         ) : (
           <Text type="secondary">-</Text>
         ),
+    },
+    {
+      title: t.keys.fieldSuppressReasoning,
+      dataIndex: "suppress_reasoning",
+      width: 110,
+      align: "center",
+      render: (v: boolean) => <StatusBadge status={!!v} label={v ? t.common.yes : t.common.no} />,
     },
     {
       title: t.common.actions,
@@ -367,6 +374,14 @@ export default function KeysPage() {
                 placeholder={t.keys.fieldKiroDefaultAccountPlaceholder}
                 options={selectedKiroAccounts.map((account) => ({ label: account, value: account }))}
               />
+            </Form.Item>
+            <Form.Item
+              name="suppress_reasoning"
+              label={t.keys.fieldSuppressReasoning}
+              valuePropName="checked"
+              tooltip={t.keys.fieldSuppressReasoningTooltip}
+            >
+              <Switch />
             </Form.Item>
           </Form>
         )}

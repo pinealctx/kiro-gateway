@@ -76,10 +76,12 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 
 	reqID := "msg_" + uuid.New().String()[:8]
 
+	suppressReasoning := middleware.SuppressReasoning(c)
+
 	if req.Stream {
-		h.handleStream(c, provider, openaiReq, req.Model, reqID)
+		h.handleStream(c, provider, openaiReq, req.Model, reqID, suppressReasoning)
 	} else {
-		h.handleNonStream(c, provider, openaiReq, req.Model, reqID)
+		h.handleNonStream(c, provider, openaiReq, req.Model, reqID, suppressReasoning)
 	}
 }
 
@@ -100,7 +102,7 @@ func estimateInputTokens(messages []models.ChatMessage) int {
 	return totalChars/4 + len(messages)*4
 }
 
-func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string) {
+func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string, suppressReasoning bool) {
 	setAnthropicHeaders(c, reqID)
 	start := time.Now()
 
@@ -124,7 +126,7 @@ func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AI
 
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
-		if choice.Message.ReasoningContent != "" {
+		if !suppressReasoning && choice.Message.ReasoningContent != "" {
 			anthropicResp.Content = append(anthropicResp.Content, models.AnthropicContentBlock{
 				Type:     "thinking",
 				Thinking: choice.Message.ReasoningContent,
@@ -168,7 +170,7 @@ func (h *AnthropicHandler) handleNonStream(c *gin.Context, provider providers.AI
 	c.JSON(http.StatusOK, anthropicResp)
 }
 
-func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string) {
+func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, model, reqID string, suppressReasoning bool) {
 	setAnthropicHeaders(c, reqID)
 	start := time.Now()
 
@@ -271,7 +273,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, provider providers.AIPro
 				}
 			}
 
-			if chunk.ReasoningContent != "" {
+			if chunk.ReasoningContent != "" && !suppressReasoning {
 				if toolBlockOpen {
 					_ = writer.WriteContentBlockStop()
 					toolBlockOpen = false

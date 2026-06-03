@@ -70,6 +70,56 @@ func TestStoreKeyCRUDWithKiroAccounts(t *testing.T) {
 	}
 }
 
+func TestStoreSuppressReasoning(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tenant.db")
+	s, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	// Defaults to false when not set.
+	key, err := s.CreateKey("test-app", WithKiroAccounts([]string{"kiro-a"}))
+	if err != nil {
+		t.Fatalf("CreateKey() error = %v", err)
+	}
+	if key.SuppressReasoning {
+		t.Fatal("SuppressReasoning should default to false")
+	}
+
+	// Create with the flag enabled.
+	on, err := s.CreateKey("quiet-app", WithKiroAccounts([]string{"kiro-a"}), WithSuppressReasoning(true))
+	if err != nil {
+		t.Fatalf("CreateKey() error = %v", err)
+	}
+	if !on.SuppressReasoning {
+		t.Fatal("SuppressReasoning should be true after WithSuppressReasoning(true)")
+	}
+
+	// Toggle via update.
+	updated, err := s.UpdateKey(key.ID, WithSuppressReasoning(true))
+	if err != nil {
+		t.Fatalf("UpdateKey() error = %v", err)
+	}
+	if !updated.SuppressReasoning {
+		t.Fatal("SuppressReasoning should be true after update")
+	}
+
+	// Persisted across a store reload (column round-trips through SQLite).
+	_ = s.Close()
+	s2, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen NewStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	reloaded, err := s2.GetKeyByID(key.ID)
+	if err != nil {
+		t.Fatalf("GetKeyByID() error = %v", err)
+	}
+	if !reloaded.SuppressReasoning {
+		t.Fatal("SuppressReasoning should persist across reload")
+	}
+}
+
 func TestStoreProviderCRUDKiroOnlyRecord(t *testing.T) {
 	s := newTestStore(t)
 

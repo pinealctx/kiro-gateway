@@ -50,6 +50,7 @@ type createKeyRequest struct {
 	Name               string   `json:"name" binding:"required"`
 	KiroAccounts       []string `json:"kiro_accounts" binding:"required"`
 	KiroDefaultAccount string   `json:"kiro_default_account"`
+	SuppressReasoning  *bool    `json:"suppress_reasoning"`
 }
 
 func (h *AdminHandler) CreateKey(c *gin.Context) {
@@ -70,6 +71,9 @@ func (h *AdminHandler) CreateKey(c *gin.Context) {
 		return
 	}
 	opts = append(opts, tenant.WithKiroDefaultAccount(defaultAccount))
+	if req.SuppressReasoning != nil {
+		opts = append(opts, tenant.WithSuppressReasoning(*req.SuppressReasoning))
+	}
 
 	key, err := h.store.CreateKey(req.Name, opts...)
 	if err != nil {
@@ -94,6 +98,7 @@ func (h *AdminHandler) ListKeys(c *gin.Context) {
 		Enabled            bool     `json:"enabled"`
 		KiroAccounts       []string `json:"kiro_accounts"`
 		KiroDefaultAccount string   `json:"kiro_default_account"`
+		SuppressReasoning  bool     `json:"suppress_reasoning"`
 		CreatedAt          string   `json:"created_at"`
 	}
 	result := make([]maskedKey, len(keys))
@@ -109,6 +114,7 @@ func (h *AdminHandler) ListKeys(c *gin.Context) {
 			Enabled:            k.Enabled,
 			KiroAccounts:       k.KiroAccounts,
 			KiroDefaultAccount: k.KiroDefaultAccount,
+			SuppressReasoning:  k.SuppressReasoning,
 			CreatedAt:          k.CreatedAt.Format(time.RFC3339),
 		}
 	}
@@ -138,6 +144,7 @@ type updateKeyRequest struct {
 	Enabled            *bool    `json:"enabled"`
 	KiroAccounts       []string `json:"kiro_accounts"`
 	KiroDefaultAccount *string  `json:"kiro_default_account"`
+	SuppressReasoning  *bool    `json:"suppress_reasoning"`
 }
 
 func (h *AdminHandler) UpdateKey(c *gin.Context) {
@@ -154,6 +161,9 @@ func (h *AdminHandler) UpdateKey(c *gin.Context) {
 	}
 	if req.Enabled != nil {
 		opts = append(opts, tenant.WithEnabled(*req.Enabled))
+	}
+	if req.SuppressReasoning != nil {
+		opts = append(opts, tenant.WithSuppressReasoning(*req.SuppressReasoning))
 	}
 	if req.KiroAccounts != nil {
 		accounts, ok := h.validateKiroAccounts(c, req.KiroAccounts, true)

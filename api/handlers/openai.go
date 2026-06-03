@@ -60,14 +60,16 @@ func (h *OpenAIHandler) ChatCompletions(c *gin.Context) {
 
 	reqID := uuid.New().String()[:8]
 
+	suppressReasoning := middleware.SuppressReasoning(c)
+
 	if req.Stream {
-		h.handleStream(c, provider, &req, reqID)
+		h.handleStream(c, provider, &req, reqID, suppressReasoning)
 	} else {
-		h.handleNonStream(c, provider, &req, reqID)
+		h.handleNonStream(c, provider, &req, reqID, suppressReasoning)
 	}
 }
 
-func (h *OpenAIHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, _ string) {
+func (h *OpenAIHandler) handleNonStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, _ string, suppressReasoning bool) {
 	start := time.Now()
 	resp, err := provider.ChatCompletion(c.Request.Context(), req)
 	if err != nil {
@@ -77,6 +79,9 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, provider providers.AIPro
 		return
 	}
 	for i := range resp.Choices {
+		if suppressReasoning {
+			resp.Choices[i].Message.ReasoningContent = ""
+		}
 		for j := range resp.Choices[i].Message.ToolCalls {
 			resp.Choices[i].Message.ToolCalls[j].ID = ensureOpenAIToolCallID(resp.Choices[i].Message.ToolCalls[j].ID)
 		}
@@ -86,7 +91,7 @@ func (h *OpenAIHandler) handleNonStream(c *gin.Context, provider providers.AIPro
 	c.JSON(http.StatusOK, resp)
 }
 
-func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, reqID string) {
+func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvider, req *models.ChatCompletionRequest, reqID string, suppressReasoning bool) {
 	start := time.Now()
 	completionID := "chatcmpl-" + reqID
 	writer := streaming.NewOpenAISSEWriter(c, req.Model, completionID)
@@ -123,7 +128,7 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, provider providers.AIProvid
 				}
 			}
 
-			if chunk.ReasoningContent != "" {
+			if chunk.ReasoningContent != "" && !suppressReasoning {
 				if err := writer.WriteReasoningDelta(chunk.ReasoningContent); err != nil {
 					return
 				}

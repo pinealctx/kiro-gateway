@@ -143,6 +143,8 @@ export default {
     fieldKiroAccountsPlaceholder: "选择此 Key 可使用的账号",
     fieldKiroDefaultAccount: "默认账号",
     fieldKiroDefaultAccountPlaceholder: "未通过 URL 指定账号时使用",
+    fieldSuppressReasoning: "隐藏思考",
+    fieldSuppressReasoningTooltip: "丢弃模型的思考（reasoning/thinking）内容。可节省 token，并避免在 Claude Code 等会二次总结的客户端中刷屏。",
     defaultAccountTag: "默认",
     usage: "用量",
     keyPrefix: "Key 前缀",
