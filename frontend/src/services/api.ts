@@ -167,6 +167,7 @@ export interface ApiKey {
   enabled: boolean;
   kiro_accounts?: string[];
   kiro_default_account?: string;
+  suppress_reasoning?: boolean;
   created_at?: string;
 }
 

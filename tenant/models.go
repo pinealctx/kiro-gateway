@@ -18,6 +18,10 @@ type APIKey struct {
 	KiroAccounts       []string `json:"kiro_accounts"`
 	KiroDefaultAccount string   `json:"kiro_default_account"`
 
+	// SuppressReasoning drops upstream reasoning/thinking content from responses
+	// for this key (both Anthropic thinking blocks and OpenAI reasoning_content).
+	SuppressReasoning bool `json:"suppress_reasoning"`
+
 	// Metadata
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
