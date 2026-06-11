@@ -282,6 +282,7 @@ export default function ProvidersPage() {
               percent={Math.min(100, quota.usage.percent_used || 0)}
               size="small"
               showInfo={false}
+              strokeColor={quotaColor(quota.usage.percent_used || 0)}
             />
             <Text type="secondary" className="text-xs">
               {quota.fetched_at ? new Date(quota.fetched_at).toLocaleString() : "-"}
@@ -372,7 +373,7 @@ export default function ProvidersPage() {
               <div>
                 <Text type="secondary" className="text-xs">{t.providers.quotaTotal}</Text>
                 <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="font-semibold text-base" style={{ color: aggregatedColor(aggregated.percentUsed) }}>
+                  <span className="font-semibold text-base" style={{ color: quotaColor(aggregated.percentUsed) }}>
                     {formatNumber(aggregated.totalUsed)} / {formatNumber(aggregated.totalLimit)}
                   </span>
                   <Tag color={aggregated.percentUsed >= 90 ? "red" : aggregated.percentUsed >= 70 ? "orange" : "green"}>
@@ -388,7 +389,7 @@ export default function ProvidersPage() {
               <Progress
                 percent={Math.min(100, aggregated.percentUsed)}
                 showInfo={false}
-                strokeColor={aggregatedColor(aggregated.percentUsed)}
+                strokeColor={quotaColor(aggregated.percentUsed)}
                 size="small"
               />
             </div>
@@ -508,6 +509,7 @@ export default function ProvidersPage() {
               <Progress
                 percent={Math.min(100, quota.usage.percent_used || 0)}
                 format={(percent) => `${formatPercent(percent)}%`}
+                strokeColor={quotaColor(quota.usage.percent_used || 0)}
               />
             </div>
             <Descriptions column={2} bordered size="small">
@@ -636,7 +638,7 @@ function formatPercent(value?: number) {
   }).format(value);
 }
 
-function aggregatedColor(pct: number) {
+function quotaColor(pct: number) {
   if (pct >= 90) return "#ef4444";
   if (pct >= 70) return "#f97316";
   return "#10b981";
