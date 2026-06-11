@@ -1,6 +1,6 @@
 .PHONY: fmt lint build test check setup-hooks
 
-VERSION ?= dev
+VERSION ?= v1.0.22
 LDFLAGS ?= -s -w -X github.com/pinealctx/kiro-gateway/version.Version=$(VERSION)
 
 fmt:

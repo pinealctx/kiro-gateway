@@ -70,6 +70,11 @@ export default {
     healthy: "健康",
     unhealthy: "异常",
     latest: "最新",
+    quotaOverview: "总额度用量",
+    quotaAccounts: "{n} 个账号",
+    quotaHealthy: "充足",
+    quotaWarning: "偏高",
+    quotaCritical: "告急",
   },
 
   providers: {
@@ -112,6 +117,8 @@ export default {
     quotaLoadError: "额度加载失败",
     quotaRefreshLatest: "获取最新",
     quotaRefreshSuccess: "已获取最新额度",
+    quotaTotal: "总额度",
+    quotaAggAccounts: "{n} 个账号有数据",
     models: "Models",
     modelsTotal: "模型数量",
     modelsDefault: "默认",

@@ -70,6 +70,11 @@ export default {
     healthy: "Healthy",
     unhealthy: "Unhealthy",
     latest: "Latest",
+    quotaOverview: "Total Quota Usage",
+    quotaAccounts: "{n} accounts",
+    quotaHealthy: "Healthy",
+    quotaWarning: "Warning",
+    quotaCritical: "Critical",
   },
 
   providers: {
@@ -112,6 +117,8 @@ export default {
     quotaLoadError: "Failed to load quota",
     quotaRefreshLatest: "Fetch latest",
     quotaRefreshSuccess: "Latest quota fetched",
+    quotaTotal: "Total Quota",
+    quotaAggAccounts: "{n} accounts with data",
     models: "Models",
     modelsTotal: "Model count",
     modelsDefault: "Default",

@@ -40,9 +40,11 @@ import {
   deleteProvider,
   getKiroUsageLimits,
   getKiroModels,
+  getAggregatedQuota,
   type ProviderRecord,
   type KiroUsageLimits,
   type KiroModelsResponse,
+  type AggregatedQuota,
 } from "@/services/api";
 import KiroAuthModal from "@/components/KiroAuthModal";
 import { useT } from "@/locales";
@@ -79,6 +81,7 @@ export default function ProvidersPage() {
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [models, setModels] = useState<KiroModelsResponse | null>(null);
+  const [aggregated, setAggregated] = useState<AggregatedQuota | null>(null);
   const [form] = Form.useForm();
   const { message } = App.useApp();
   const t = useT();
@@ -88,6 +91,8 @@ export default function ProvidersPage() {
     try {
       const res = await listProviders();
       setData(res.accounts);
+      const agg = await getAggregatedQuota(res.accounts);
+      setAggregated(agg);
     } catch {
       message.error(t.providers.loadError);
     } finally {
@@ -360,6 +365,37 @@ export default function ProvidersPage() {
         </Space>
       </div>
 
+      {aggregated?.hasData && (
+        <Card className="mb-5" size="small">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div>
+                <Text type="secondary" className="text-xs">{t.providers.quotaTotal}</Text>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  <span className="font-semibold text-base" style={{ color: aggregatedColor(aggregated.percentUsed) }}>
+                    {formatNumber(aggregated.totalUsed)} / {formatNumber(aggregated.totalLimit)}
+                  </span>
+                  <Tag color={aggregated.percentUsed >= 90 ? "red" : aggregated.percentUsed >= 70 ? "orange" : "green"}>
+                    {formatPercent(aggregated.percentUsed)}%
+                  </Tag>
+                  <Text type="secondary" className="text-xs hidden sm:inline">
+                    ({t.providers.quotaAggAccounts.replace("{n}", String(aggregated.accountCount))})
+                  </Text>
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 min-w-[160px]">
+              <Progress
+                percent={Math.min(100, aggregated.percentUsed)}
+                showInfo={false}
+                strokeColor={aggregatedColor(aggregated.percentUsed)}
+                size="small"
+              />
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card className="overflow-hidden">
         <Table
           rowKey="id"
@@ -598,6 +634,12 @@ function formatPercent(value?: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function aggregatedColor(pct: number) {
+  if (pct >= 90) return "#ef4444";
+  if (pct >= 70) return "#f97316";
+  return "#10b981";
 }
 
 function formatTokenLimits(limits?: { max_input_tokens: number; max_output_tokens: number }) {

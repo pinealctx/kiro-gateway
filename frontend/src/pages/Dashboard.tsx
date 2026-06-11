@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Row, Col, Typography, Skeleton, Empty, Tag } from "antd";
+import { Card, Row, Col, Typography, Skeleton, Empty, Tag, Progress, Tooltip } from "antd";
 import {
   CloudServerOutlined,
   KeyOutlined,
@@ -9,7 +9,7 @@ import {
   ThunderboltOutlined,
   BarChartOutlined,
 } from "@ant-design/icons";
-import { getHealth, listProviders, listKeys, getUsage } from "@/services/api";
+import { getHealth, listProviders, listKeys, getUsage, getAggregatedQuota, type AggregatedQuota } from "@/services/api";
 import { useT } from "@/locales";
 
 const { Title, Text } = Typography;
@@ -79,6 +79,7 @@ export default function DashboardPage() {
   const [keyCount, setKeyCount] = useState(0);
   const [totalRequests, setTotalRequests] = useState(0);
   const [totalTokens, setTotalTokens] = useState(0);
+  const [quota, setQuota] = useState<AggregatedQuota | null>(null);
   const [error, setError] = useState(false);
   const t = useT();
 
@@ -96,12 +97,14 @@ export default function DashboardPage() {
         setHealthyCount(providers.accounts.filter((p) => p.healthy).length);
         setKeyCount(keys.total);
 
-        // Calculate usage totals
         const usageData = usage.usage ?? [];
         const requests = usageData.reduce((acc, item) => acc + (item.total_requests || 0), 0);
         const tokens = usageData.reduce((acc, item) => acc + (item.total_tokens || 0), 0);
         setTotalRequests(requests);
         setTotalTokens(tokens);
+
+        const agg = await getAggregatedQuota(providers.accounts);
+        setQuota(agg);
       } catch {
         setError(true);
       } finally {
@@ -122,6 +125,12 @@ export default function DashboardPage() {
   }
 
   const unhealthyCount = providerCount - healthyCount;
+
+  function quotaColor(pct: number) {
+    if (pct >= 90) return "#ef4444";
+    if (pct >= 70) return "#f97316";
+    return "#10b981";
+  }
 
   const quickNavItems = [
     {
@@ -237,7 +246,7 @@ export default function DashboardPage() {
         {t.dashboard.usageStats}
       </Title>
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12}>
+        <Col xs={24} sm={12} lg={quota?.hasData ? 8 : 12}>
           {loading ? (
             <SkeletonCard />
           ) : (
@@ -249,7 +258,7 @@ export default function DashboardPage() {
             />
           )}
         </Col>
-        <Col xs={24} sm={12}>
+        <Col xs={24} sm={12} lg={quota?.hasData ? 8 : 12}>
           {loading ? (
             <SkeletonCard />
           ) : (
@@ -261,6 +270,41 @@ export default function DashboardPage() {
             />
           )}
         </Col>
+        {!loading && quota?.hasData && (
+          <Col xs={24} sm={24} lg={8}>
+            <Card className="h-full hover:shadow-md transition-shadow duration-200">
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <Typography.Text type="secondary" className="text-sm">
+                    {t.dashboard.quotaOverview}
+                  </Typography.Text>
+                  <div className="mt-1 flex items-baseline gap-2">
+                    <Tooltip title={`${quota.totalUsed.toLocaleString(undefined, { maximumFractionDigits: 2 })} / ${quota.totalLimit.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}>
+                      <span className="text-2xl font-semibold" style={{ color: quotaColor(quota.percentUsed) }}>
+                        {quota.percentUsed.toFixed(1)}%
+                      </span>
+                    </Tooltip>
+                    <Tag color={quota.percentUsed >= 90 ? "red" : quota.percentUsed >= 70 ? "orange" : "green"} className="ml-1">
+                      {quota.percentUsed >= 90 ? t.dashboard.quotaCritical : quota.percentUsed >= 70 ? t.dashboard.quotaWarning : t.dashboard.quotaHealthy}
+                    </Tag>
+                  </div>
+                </div>
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ backgroundColor: `${quotaColor(quota.percentUsed)}15` }}>
+                  <BarChartOutlined style={{ color: quotaColor(quota.percentUsed), fontSize: 24 }} />
+                </div>
+              </div>
+              <Progress
+                percent={Math.min(100, quota.percentUsed)}
+                showInfo={false}
+                strokeColor={quotaColor(quota.percentUsed)}
+                size="small"
+              />
+              <Typography.Text type="secondary" className="text-xs mt-1 block">
+                {t.dashboard.quotaAccounts.replace("{n}", String(quota.accountCount))}
+              </Typography.Text>
+            </Card>
+          </Col>
+        )}
       </Row>
 
       {/* Quick Actions */}

@@ -130,6 +130,30 @@ export const getKiroUsageLimits = (provider?: string, refresh?: boolean) => {
   return request<KiroUsageLimits>("GET", `/admin/kiro/usage-limits${query ? `?${query}` : ""}`);
 };
 
+export interface AggregatedQuota {
+  totalUsed: number;
+  totalLimit: number;
+  percentUsed: number;
+  accountCount: number;
+  hasData: boolean;
+}
+
+export async function getAggregatedQuota(accounts: ProviderRecord[]): Promise<AggregatedQuota> {
+  const withQuota = accounts.filter((a) => a.enabled && a.usage_limits);
+  if (withQuota.length === 0) {
+    return { totalUsed: 0, totalLimit: 0, percentUsed: 0, accountCount: 0, hasData: false };
+  }
+  let totalUsed = 0;
+  let totalLimit = 0;
+  for (const a of withQuota) {
+    const u = a.usage_limits!.usage;
+    totalUsed += u.used_precise ?? u.used ?? 0;
+    totalLimit += u.limit_precise ?? u.limit ?? 0;
+  }
+  const percentUsed = totalLimit > 0 ? (totalUsed / totalLimit) * 100 : 0;
+  return { totalUsed, totalLimit, percentUsed, accountCount: withQuota.length, hasData: true };
+}
+
 export interface KiroModelsResponse {
   provider: string;
   models: KiroModelInfo[];
