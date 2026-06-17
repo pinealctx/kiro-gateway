@@ -241,6 +241,18 @@ export const getUsage = (params?: {
   return request<{ usage: UsageRecord[] }>("GET", `/admin/usage${q ? `?${q}` : ""}`);
 };
 
+// --- Notifications ---
+export interface TeamsNotificationStatus {
+  configured: boolean;
+  enabled: boolean;
+}
+
+export const getTeamsNotificationStatus = () =>
+  request<TeamsNotificationStatus>("GET", "/admin/notifications/teams");
+
+export const updateTeamsNotificationStatus = (enabled: boolean) =>
+  request<TeamsNotificationStatus>("PUT", "/admin/notifications/teams", { enabled });
+
 // --- Kiro ---
 export interface KiroLoginSession {
   id: string;

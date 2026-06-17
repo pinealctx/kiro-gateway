@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Row, Col, Typography, Skeleton, Empty, Tag, Progress, Tooltip } from "antd";
+import { App, Card, Row, Col, Typography, Skeleton, Empty, Tag, Progress, Tooltip, Switch } from "antd";
 import {
   CloudServerOutlined,
   KeyOutlined,
@@ -8,8 +8,19 @@ import {
   CloseCircleOutlined,
   ThunderboltOutlined,
   BarChartOutlined,
+  NotificationOutlined,
 } from "@ant-design/icons";
-import { getHealth, listProviders, listKeys, getUsage, getAggregatedQuota, type AggregatedQuota } from "@/services/api";
+import {
+  getHealth,
+  listProviders,
+  listKeys,
+  getUsage,
+  getAggregatedQuota,
+  getTeamsNotificationStatus,
+  updateTeamsNotificationStatus,
+  type AggregatedQuota,
+  type TeamsNotificationStatus,
+} from "@/services/api";
 import { useT } from "@/locales";
 
 const { Title, Text } = Typography;
@@ -80,17 +91,21 @@ export default function DashboardPage() {
   const [totalRequests, setTotalRequests] = useState(0);
   const [totalTokens, setTotalTokens] = useState(0);
   const [quota, setQuota] = useState<AggregatedQuota | null>(null);
+  const [teamsNotification, setTeamsNotification] = useState<TeamsNotificationStatus | null>(null);
+  const [notificationSaving, setNotificationSaving] = useState(false);
   const [error, setError] = useState(false);
+  const { message } = App.useApp();
   const t = useT();
 
   useEffect(() => {
     (async () => {
       try {
-        const [health, providers, keys, usage] = await Promise.all([
+        const [health, providers, keys, usage, notification] = await Promise.all([
           getHealth(),
           listProviders(),
           listKeys(),
           getUsage(),
+          getTeamsNotificationStatus(),
         ]);
         setVersion(health.version);
         setProviderCount(providers.total);
@@ -102,6 +117,7 @@ export default function DashboardPage() {
         const tokens = usageData.reduce((acc, item) => acc + (item.total_tokens || 0), 0);
         setTotalRequests(requests);
         setTotalTokens(tokens);
+        setTeamsNotification(notification);
 
         const agg = await getAggregatedQuota(providers.accounts);
         setQuota(agg);
@@ -125,6 +141,19 @@ export default function DashboardPage() {
   }
 
   const unhealthyCount = providerCount - healthyCount;
+
+  async function toggleTeamsNotification(enabled: boolean) {
+    setNotificationSaving(true);
+    try {
+      const next = await updateTeamsNotificationStatus(enabled);
+      setTeamsNotification(next);
+      message.success(enabled ? t.dashboard.notificationEnabled : t.dashboard.notificationDisabled);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : t.dashboard.notificationUpdateFailed);
+    } finally {
+      setNotificationSaving(false);
+    }
+  }
 
   function quotaColor(pct: number) {
     if (pct >= 90) return "#ef4444";
@@ -158,6 +187,36 @@ export default function DashboardPage() {
       <Title level={4} className="!mb-6">
         {t.dashboard.title}
       </Title>
+
+      {!loading && teamsNotification && (
+        <Card className="mb-5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center text-blue-500">
+                <NotificationOutlined />
+              </div>
+              <div className="min-w-0">
+                <Text strong>{t.dashboard.teamsNotification}</Text>
+                <div>
+                  <Text type="secondary" className="text-xs">
+                    {teamsNotification.configured
+                      ? t.dashboard.teamsNotificationDesc
+                      : t.dashboard.teamsNotificationNotConfigured}
+                  </Text>
+                </div>
+              </div>
+            </div>
+            <Switch
+              checked={teamsNotification.enabled}
+              disabled={!teamsNotification.configured}
+              loading={notificationSaving}
+              checkedChildren={t.common.enabled}
+              unCheckedChildren={t.common.disabled}
+              onChange={toggleTeamsNotification}
+            />
+          </div>
+        </Card>
+      )}
 
       {/* Main Stats */}
       <Row gutter={[16, 16]}>

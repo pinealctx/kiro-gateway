@@ -75,6 +75,12 @@ export default {
     quotaHealthy: "充足",
     quotaWarning: "偏高",
     quotaCritical: "告急",
+    teamsNotification: "Teams 通知",
+    teamsNotificationDesc: "额度阈值和每日摘要会推送到 Teams 群",
+    teamsNotificationNotConfigured: "尚未配置 Teams Webhook",
+    notificationEnabled: "Teams 通知已开启",
+    notificationDisabled: "Teams 通知已关闭",
+    notificationUpdateFailed: "通知状态更新失败",
   },
 
   providers: {

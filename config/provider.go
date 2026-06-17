@@ -11,10 +11,11 @@ type ProviderConfig struct {
 // GatewayConfig is the top-level YAML configuration.
 // Providers are managed at runtime via the Admin API and persisted in SQLite.
 type GatewayConfig struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Defaults DefaultsConfig `mapstructure:"defaults"`
-	Tenant   TenantConfig   `mapstructure:"tenant"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Auth          AuthConfig          `mapstructure:"auth"`
+	Defaults      DefaultsConfig      `mapstructure:"defaults"`
+	Tenant        TenantConfig        `mapstructure:"tenant"`
+	Notifications NotificationsConfig `mapstructure:"notifications"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -41,4 +42,20 @@ type DefaultsConfig struct {
 // TenantConfig holds multi-tenant settings.
 type TenantConfig struct {
 	DBPath string `mapstructure:"db_path"` // SQLite database path for tenant data
+}
+
+// NotificationsConfig holds outbound notification settings.
+type NotificationsConfig struct {
+	Teams TeamsNotificationConfig `mapstructure:"teams"`
+}
+
+// TeamsNotificationConfig controls Teams quota notifications.
+type TeamsNotificationConfig struct {
+	Enabled              bool      `mapstructure:"enabled"`
+	WebhookURL           string    `mapstructure:"webhook_url"`
+	AccountThresholds    []float64 `mapstructure:"account_thresholds"`
+	TotalThresholds      []float64 `mapstructure:"total_thresholds"`
+	DailyTimes           []string  `mapstructure:"daily_times"` // HH:MM local time, supports one or two entries
+	Timezone             string    `mapstructure:"timezone"`
+	CheckIntervalSeconds int       `mapstructure:"check_interval_seconds"`
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/pinealctx/kiro-gateway/api/routes"
 	"github.com/pinealctx/kiro-gateway/config"
 	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/notifications"
 	"github.com/pinealctx/kiro-gateway/providers/kiro"
 	"github.com/pinealctx/kiro-gateway/tenant"
 	"github.com/pinealctx/kiro-gateway/version"
@@ -143,6 +144,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	quotaNotifier := notifications.NewQuotaNotifier(gwCfg.Notifications.Teams, registry, store, logger)
+	if quotaNotifier.Enabled() {
+		quotaNotifier.Start()
+		logger.Info("Teams quota notifications started",
+			zap.Int("check_interval_seconds", gwCfg.Notifications.Teams.CheckIntervalSeconds),
+			zap.Strings("daily_times", gwCfg.Notifications.Teams.DailyTimes),
+		)
+	}
+
 	routerCfg := routes.RouterConfig{
 		Registry:        registry,
 		Logger:          logger,
@@ -151,6 +161,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:           store,
 		CORSOrigins:     gwCfg.Server.CORSOrigins,
 		ProviderFactory: createProvider,
+		Notifications:   gwCfg.Notifications,
 	}
 
 	// Setup Gin router
@@ -204,6 +215,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Stop background goroutines
+	if quotaNotifier.Enabled() {
+		quotaNotifier.Stop()
+	}
 	for _, p := range registry.All() {
 		if s, ok := p.(providers.Stoppable); ok {
 			s.Stop()

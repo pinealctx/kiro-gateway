@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pinealctx/kiro-gateway/api/handlers"
+	"github.com/pinealctx/kiro-gateway/config"
 	"github.com/pinealctx/kiro-gateway/core/providers"
 	"github.com/pinealctx/kiro-gateway/middleware"
 	"github.com/pinealctx/kiro-gateway/tenant"
@@ -24,6 +25,7 @@ type RouterConfig struct {
 	Store           *tenant.Store            // Always set — used for provider/key storage
 	CORSOrigins     []string                 // Allowed CORS origins (empty = allow all)
 	ProviderFactory handlers.ProviderFactory // Factory for dynamic provider management
+	Notifications   config.NotificationsConfig
 }
 
 func SetupRouter(cfg RouterConfig) *gin.Engine {
@@ -127,7 +129,7 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 		}
 		admin.Use(adminAuth(cfg.AdminKey))
 
-		adminH := handlers.NewAdminHandler(cfg.Store, cfg.Registry, cfg.ProviderFactory, cfg.Logger)
+		adminH := handlers.NewAdminHandler(cfg.Store, cfg.Registry, cfg.ProviderFactory, cfg.Logger, cfg.Notifications.Teams)
 		admin.POST("/keys", adminH.CreateKey)
 		admin.GET("/keys", adminH.ListKeys)
 		admin.GET("/keys/:id", adminH.GetKey)
@@ -141,6 +143,8 @@ func SetupRouter(cfg RouterConfig) *gin.Engine {
 		admin.DELETE("/accounts/:id", adminH.DeleteProvider)
 
 		admin.GET("/usage", adminH.GetUsage)
+		admin.GET("/notifications/teams", adminH.GetTeamsNotification)
+		admin.PUT("/notifications/teams", adminH.UpdateTeamsNotification)
 
 		// Kiro PKCE login management (dynamic provider lookup)
 		kiroH := handlers.NewKiroAdminHandler(cfg.Registry)

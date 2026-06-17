@@ -29,3 +29,15 @@ defaults:
 
 tenant:
   db_path: "kiro-gateway.db"
+
+notifications:
+  teams:
+    enabled: false
+    # Use a Microsoft Teams Workflows / Power Automate webhook URL.
+    # You can also set TEAMS_WEBHOOK_URL and omit this value.
+    webhook_url: "${TEAMS_WEBHOOK_URL}"
+    account_thresholds: [90, 100] # send once when accounts cross each percentage
+    total_thresholds: [90, 100]   # send once when all accounts combined cross each percentage
+    daily_times: ["09:00", "18:00"] # one or two HH:MM local-time summaries
+    timezone: "Asia/Shanghai"
+    check_interval_seconds: 600

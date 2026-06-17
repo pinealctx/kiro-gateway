@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pinealctx/kiro-gateway/config"
 	"github.com/pinealctx/kiro-gateway/core/providers"
+	"github.com/pinealctx/kiro-gateway/notifications"
 	"github.com/pinealctx/kiro-gateway/providers/kiro"
 	"github.com/pinealctx/kiro-gateway/tenant"
 	"go.uber.org/zap"
@@ -29,10 +30,15 @@ type AdminHandler struct {
 	registry *providers.Registry
 	factory  ProviderFactory
 	logger   *zap.Logger
+	teamsCfg config.TeamsNotificationConfig
 }
 
-func NewAdminHandler(store *tenant.Store, registry *providers.Registry, factory ProviderFactory, logger *zap.Logger) *AdminHandler {
-	return &AdminHandler{store: store, registry: registry, factory: factory, logger: logger}
+func NewAdminHandler(store *tenant.Store, registry *providers.Registry, factory ProviderFactory, logger *zap.Logger, teamsCfg ...config.TeamsNotificationConfig) *AdminHandler {
+	cfg := config.TeamsNotificationConfig{}
+	if len(teamsCfg) > 0 {
+		cfg = teamsCfg[0]
+	}
+	return &AdminHandler{store: store, registry: registry, factory: factory, logger: logger, teamsCfg: cfg}
 }
 
 // adminError writes a standardized error response for Admin endpoints.
@@ -40,6 +46,35 @@ func adminError(c *gin.Context, status int, errType, message string) {
 	c.JSON(status, gin.H{
 		"error": gin.H{"message": message, "type": errType},
 	})
+}
+
+// ============================================================
+// Teams notification settings
+// ============================================================
+
+type updateTeamsNotificationRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
+}
+
+func (h *AdminHandler) GetTeamsNotification(c *gin.Context) {
+	c.JSON(http.StatusOK, notifications.GetRuntimeStatus(h.store, h.teamsCfg))
+}
+
+func (h *AdminHandler) UpdateTeamsNotification(c *gin.Context) {
+	var req updateTeamsNotificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		adminError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if !notifications.GetRuntimeStatus(h.store, h.teamsCfg).Configured {
+		adminError(c, http.StatusBadRequest, "invalid_request_error", "teams notifications are not configured")
+		return
+	}
+	if err := notifications.SetRuntimeEnabled(h.store, *req.Enabled); err != nil {
+		adminError(c, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, notifications.GetRuntimeStatus(h.store, h.teamsCfg))
 }
 
 // ============================================================

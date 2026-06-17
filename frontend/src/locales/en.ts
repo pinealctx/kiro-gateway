@@ -75,6 +75,12 @@ export default {
     quotaHealthy: "Healthy",
     quotaWarning: "Warning",
     quotaCritical: "Critical",
+    teamsNotification: "Teams Notifications",
+    teamsNotificationDesc: "Quota thresholds and daily summaries are sent to Teams",
+    teamsNotificationNotConfigured: "Teams webhook is not configured",
+    notificationEnabled: "Teams notifications enabled",
+    notificationDisabled: "Teams notifications disabled",
+    notificationUpdateFailed: "Failed to update notification status",
   },
 
   providers: {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -132,6 +133,7 @@ func loadFromFile(path string, cmd *cobra.Command) (*GatewayConfig, error) {
 	if gw.Tenant.DBPath == "" {
 		gw.Tenant.DBPath = DefaultDBPath()
 	}
+	applyNotificationDefaults(&gw)
 
 	return &gw, nil
 }
@@ -175,7 +177,7 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 		dbPath = DefaultDBPath()
 	}
 
-	return &GatewayConfig{
+	gw := &GatewayConfig{
 		Server: ServerConfig{
 			Host:      host,
 			Port:      port,
@@ -194,6 +196,55 @@ func synthesizeFromFlags(cmd *cobra.Command) *GatewayConfig {
 			DBPath: dbPath,
 		},
 	}
+	applyNotificationEnv(gw)
+	applyNotificationDefaults(gw)
+	return gw
+}
+
+func applyNotificationEnv(gw *GatewayConfig) {
+	if v := os.Getenv("TEAMS_WEBHOOK_URL"); v != "" {
+		gw.Notifications.Teams.WebhookURL = v
+		gw.Notifications.Teams.Enabled = true
+	}
+}
+
+func applyNotificationDefaults(gw *GatewayConfig) {
+	teams := &gw.Notifications.Teams
+	teams.WebhookURL = expandEnvValue(teams.WebhookURL)
+	if teams.WebhookURL == "" {
+		teams.WebhookURL = os.Getenv("TEAMS_WEBHOOK_URL")
+	}
+	if teams.WebhookURL != "" {
+		teams.Enabled = true
+	}
+	if !teams.Enabled {
+		return
+	}
+	if len(teams.AccountThresholds) == 0 {
+		teams.AccountThresholds = []float64{90, 100}
+	}
+	if len(teams.TotalThresholds) == 0 {
+		teams.TotalThresholds = []float64{90, 100}
+	}
+	if len(teams.DailyTimes) == 0 {
+		teams.DailyTimes = []string{"09:00"}
+	}
+	if teams.Timezone == "" {
+		teams.Timezone = "Local"
+	}
+	if teams.CheckIntervalSeconds <= 0 {
+		teams.CheckIntervalSeconds = 10 * 60
+	}
+	sort.Float64s(teams.AccountThresholds)
+	sort.Float64s(teams.TotalThresholds)
+}
+
+func expandEnvValue(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		return os.Getenv(strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}"))
+	}
+	return os.ExpandEnv(value)
 }
 
 // resolveStr: flag (if explicitly set) > env > flag default.
