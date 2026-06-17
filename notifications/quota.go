@@ -15,6 +15,7 @@ import (
 	"github.com/pinealctx/kiro-gateway/config"
 	"github.com/pinealctx/kiro-gateway/core/providers"
 	kiroProvider "github.com/pinealctx/kiro-gateway/providers/kiro"
+	"github.com/pinealctx/kiro-gateway/tenant"
 	"go.uber.org/zap"
 )
 
@@ -28,10 +29,19 @@ type kvStore interface {
 	SetKV(key, value string) error
 }
 
+type keyStore interface {
+	ListKeys() []*tenant.APIKey
+}
+
+type notificationStore interface {
+	kvStore
+	keyStore
+}
+
 type QuotaNotifier struct {
 	cfg      config.TeamsNotificationConfig
 	registry *providers.Registry
-	store    kvStore
+	store    notificationStore
 	logger   *zap.Logger
 	client   *http.Client
 	stopCh   chan struct{}
@@ -82,7 +92,7 @@ type teamsTextBlock struct {
 	Size   string `json:"size,omitempty"`
 }
 
-func NewQuotaNotifier(cfg config.TeamsNotificationConfig, registry *providers.Registry, store kvStore, logger *zap.Logger) *QuotaNotifier {
+func NewQuotaNotifier(cfg config.TeamsNotificationConfig, registry *providers.Registry, store notificationStore, logger *zap.Logger) *QuotaNotifier {
 	return &QuotaNotifier{
 		cfg:      cfg,
 		registry: registry,
@@ -177,6 +187,7 @@ func (n *QuotaNotifier) sendThresholdSummary(events []thresholdEvent, total quot
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Snapshot.PercentUsed > events[j].Snapshot.PercentUsed
 	})
+	usersByAccount := n.apiUsersByAccount()
 	lines := []string{
 		"**Kiro 额度阈值提醒**",
 		"",
@@ -188,9 +199,40 @@ func (n *QuotaNotifier) sendThresholdSummary(events []thresholdEvent, total quot
 	lines = append(lines, "", fmt.Sprintf("触发账号：%d / %d", len(events), accountCount))
 	for _, event := range events {
 		snap := event.Snapshot
-		lines = append(lines, fmt.Sprintf("- `%s` %s **%.1f%%**，达到 %.0f%%，剩余 %s", snap.Account, batteryBar(snap.PercentUsed), snap.PercentUsed, event.Threshold, formatNumber(snap.Remaining)))
+		action := "预警：请关注用量"
+		if event.Threshold >= 100 {
+			action = "请更换账号"
+		}
+		lines = append(lines, fmt.Sprintf("- `%s` %s **%.1f%%**，达到 %.0f%%，剩余 %s。%s", snap.Account, batteryBar(snap.PercentUsed), snap.PercentUsed, event.Threshold, formatNumber(snap.Remaining), action))
+		if users := usersByAccount[snap.Account]; len(users) > 0 {
+			lines = append(lines, fmt.Sprintf("  提醒对象：%s", formatMentions(users)))
+		}
 	}
 	n.send("quota threshold summary", strings.Join(lines, "\n"))
+}
+
+func (n *QuotaNotifier) apiUsersByAccount() map[string][]string {
+	result := map[string][]string{}
+	if n.store == nil {
+		return result
+	}
+	for _, key := range n.store.ListKeys() {
+		if key == nil || !key.Enabled {
+			continue
+		}
+		name := strings.TrimSpace(key.Name)
+		if name == "" {
+			name = key.ID
+		}
+		for _, account := range key.KiroAccounts {
+			account = strings.TrimSpace(account)
+			if account == "" {
+				continue
+			}
+			result[account] = appendUnique(result[account], name)
+		}
+	}
+	return result
 }
 
 func (n *QuotaNotifier) runDailyIfDue(now time.Time) {
@@ -441,6 +483,31 @@ func emptyDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func formatMentions(users []string) string {
+	sort.Strings(users)
+	mentions := make([]string, 0, len(users))
+	for _, user := range users {
+		user = strings.TrimSpace(user)
+		if user == "" {
+			continue
+		}
+		mentions = append(mentions, "@"+user)
+	}
+	if len(mentions) == 0 {
+		return "-"
+	}
+	return strings.Join(mentions, " ")
 }
 
 func batteryBar(percent float64) string {
