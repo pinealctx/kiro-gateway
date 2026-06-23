@@ -28,7 +28,7 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await getUsage(keyId ? { key_id: keyId } : undefined);
+      const res = await getUsage({ ...(keyId ? { key_id: keyId } : {}), group_by: keyId ? "key_model" : "model" });
       setData(res.usage ?? []);
     } catch {
       // Error handled by empty state
@@ -67,9 +67,29 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
       ),
     },
     {
-      title: t.usage.tokens,
+      title: t.usage.inputTokens,
+      dataIndex: "input_tokens",
+      width: 130,
+      align: "right",
+      sorter: (a, b) => a.input_tokens - b.input_tokens,
+      render: (v: number) => (
+        <Text className="font-mono text-cyan-600 dark:text-cyan-400">{formatNumber(v)}</Text>
+      ),
+    },
+    {
+      title: t.usage.outputTokens,
+      dataIndex: "output_tokens",
+      width: 130,
+      align: "right",
+      sorter: (a, b) => a.output_tokens - b.output_tokens,
+      render: (v: number) => (
+        <Text className="font-mono text-purple-600 dark:text-purple-400">{formatNumber(v)}</Text>
+      ),
+    },
+    {
+      title: t.usage.totalTokens,
       dataIndex: "total_tokens",
-      width: 120,
+      width: 130,
       align: "right",
       sorter: (a, b) => a.total_tokens - b.total_tokens,
       render: (v: number) => (
@@ -91,9 +111,11 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
   const totals = data.reduce(
     (acc, item) => ({
       requests: acc.requests + (item.total_requests || 0),
-      tokens: acc.tokens + (item.total_tokens || 0),
+      inputTokens: acc.inputTokens + (item.input_tokens || 0),
+      outputTokens: acc.outputTokens + (item.output_tokens || 0),
+      totalTokens: acc.totalTokens + (item.total_tokens || 0),
     }),
-    { requests: 0, tokens: 0 }
+    { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 }
   );
 
   const title = keyName ? `${t.usage.title} - ${keyName}` : t.usage.title;
@@ -109,7 +131,7 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
       open={open}
       onCancel={onClose}
       footer={null}
-      width={600}
+      width={860}
       destroyOnClose
     >
       {loading ? (
@@ -125,9 +147,9 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
       ) : (
         <>
           {/* Summary */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
             <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <Text type="secondary" className="text-xs">{t.dashboard.providers}</Text>
+              <Text type="secondary" className="text-xs">{t.usage.modelCount}</Text>
               <div className="text-lg font-semibold mt-1">{data.length}</div>
             </div>
             <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
@@ -135,8 +157,16 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
               <div className="text-lg font-semibold mt-1 font-mono">{formatNumber(totals.requests)}</div>
             </div>
             <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <Text type="secondary" className="text-xs">{t.usage.inputTokens}</Text>
+              <div className="text-lg font-semibold mt-1 font-mono text-cyan-600 dark:text-cyan-400">{formatNumber(totals.inputTokens)}</div>
+            </div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <Text type="secondary" className="text-xs">{t.usage.outputTokens}</Text>
+              <div className="text-lg font-semibold mt-1 font-mono text-purple-600 dark:text-purple-400">{formatNumber(totals.outputTokens)}</div>
+            </div>
+            <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
               <Text type="secondary" className="text-xs">{t.usage.totalTokens}</Text>
-              <div className="text-lg font-semibold mt-1 font-mono text-blue-500">{formatNumber(totals.tokens)}</div>
+              <div className="text-lg font-semibold mt-1 font-mono text-blue-500">{formatNumber(totals.totalTokens)}</div>
             </div>
           </div>
 
@@ -147,7 +177,7 @@ export default function UsageModal({ open, keyId, keyName, onClose }: Props) {
             dataSource={data}
             pagination={false}
             size="small"
-            scroll={{ y: 300 }}
+            scroll={{ x: 760, y: 340 }}
           />
         </>
       )}

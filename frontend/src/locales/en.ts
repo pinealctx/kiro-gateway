@@ -176,6 +176,8 @@ export default {
     modelName: "Model",
     requests: "Requests",
     tokens: "Tokens",
+    inputTokens: "Input Tokens",
+    outputTokens: "Output Tokens",
     avgTokens: "Avg Tokens",
   },
 

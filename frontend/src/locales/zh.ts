@@ -176,6 +176,8 @@ export default {
     modelName: "模型",
     requests: "请求数",
     tokens: "Token 数",
+    inputTokens: "Input Token",
+    outputTokens: "Output Token",
     avgTokens: "平均 Tokens",
   },
 
